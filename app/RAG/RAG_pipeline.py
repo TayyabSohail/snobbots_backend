@@ -7,7 +7,7 @@ import pickle
 
 INDEX_FILE = "output_data/faiss.index"
 CHUNKS_FILE = "output_data/chunks.pkl"
-PDF_FILE = "input_data/Faculty Retention Policy 2025 V1.0.docx"
+PDF_FILE = "input_data/Technevity Inc. NDA 1.0.pdf"
 
 def extract_text_from_pdf(pdf_path):
     doc = fitz.open(pdf_path)
@@ -24,8 +24,8 @@ text = extract_text_from_pdf(PDF_FILE) # Store the extracted text in a variable
 chunks = text_splitter.split_text(text)
 
 # Uncomment the following two lines and comment third one when running for first time, this saves the model locally
-# model = SentenceTransformer("all-MiniLM-L6-v2")  # Lightweight and popular
-# model.save("./all-MiniLM-L6-v2")
+#model = SentenceTransformer("all-MiniLM-L6-v2")  # Lightweight and popular
+#model.save("./all-MiniLM-L6-v2")
 model = SentenceTransformer("./all-MiniLM-L6-v2")
 embeddings = model.encode(chunks)
 
