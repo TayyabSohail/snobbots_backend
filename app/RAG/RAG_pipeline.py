@@ -1,18 +1,19 @@
-import fitz  # New name for PyMuPDF
+import fitz  # PyMuPDF
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import faiss
 import numpy as np
 import pickle
+from dotenv import load_dotenv
 import os
-from mistralai.client import MistralClient
+from mistralai import Mistral
 
 INDEX_FILE = "output_data/faiss.index"
 CHUNKS_FILE = "output_data/chunks.pkl"
-PDF_FILE = "input_data/Faculty Retention Policy 2025 V1.0.docx"
+PDF_FILE = "input_data/Technevity Inc. NDA 1.0.pdf"
 
-# Set up Mistral API client
+load_dotenv()
 API_KEY = os.getenv("MISTRAL_API_KEY")
-client = MistralClient(api_key=API_KEY)
+client = Mistral(api_key=API_KEY)
 
 def extract_text_from_pdf(pdf_path):
     doc = fitz.open(pdf_path)
@@ -21,31 +22,22 @@ def extract_text_from_pdf(pdf_path):
         text += page.get_text()
     return text
 
-# Split text into chunks
-text_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=1000,
-    chunk_overlap=200
-)
+text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
 text = extract_text_from_pdf(PDF_FILE)
 chunks = text_splitter.split_text(text)
 
-# Get embeddings from Mistral API
+# Embed chunks using Mistral API
 embeddings = []
 for chunk in chunks:
-    resp = client.embeddings(
-        model="mistral-embed",  # Replace with the actual Mistral embedding model name
-        input=chunk
-    )
+    resp = client.embeddings.create(model="mistral-embed", inputs=[chunk])
     embeddings.append(resp.data[0].embedding)
 
 embedding_matrix = np.array(embeddings, dtype="float32")
 
-# Create FAISS index
 dimension = embedding_matrix.shape[1]
 index = faiss.IndexFlatL2(dimension)
 index.add(embedding_matrix)
 
-# Save FAISS index and chunks
 faiss.write_index(index, INDEX_FILE)
 with open(CHUNKS_FILE, "wb") as f:
     pickle.dump(chunks, f)
