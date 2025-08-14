@@ -195,3 +195,27 @@ async def get_user_profile(user_id: str) -> Optional[UserResponse]:
     except Exception as e:
         logger.error(f"Error fetching user profile: {str(e)}")
         return None
+
+async def update_user_password(access_token: str, refresh_token: str, new_password: str) -> Dict[str, Any]:
+    """
+    Update user's password using the Supabase session tokens.
+    """
+    supabase = get_supabase_client()
+
+    try:
+        # Set the authenticated session using both tokens
+        supabase.auth.set_session(
+            access_token=access_token,
+            refresh_token=refresh_token
+        )
+
+        # Update the password
+        response = supabase.auth.update_user({"password": new_password})
+
+        if getattr(response, "error", None):
+            return {"error": response.error.message}
+
+        return {"success": True, "message": "Password updated successfully"}
+
+    except Exception as e:
+        return {"error": str(e)}
