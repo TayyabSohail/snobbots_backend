@@ -154,3 +154,10 @@ Thumbs.db
 uploads/
 logs/
 *.db
+
+
+# Files in RAG folder
+app/RAG/all-MiniLM-L6-v2
+app/RAG/input_data
+app/RAG/output_data
+app/RAG/.env
