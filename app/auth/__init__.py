@@ -5,6 +5,7 @@ from .auth_service import (
     login_user,
     reset_user_password,
     get_user_profile,
+    update_user_password,
     ensure_user_in_database
 )
 
@@ -16,7 +17,7 @@ from .models import (
     ResetPasswordRequest,
     UserResponse,
     AuthResponse,
-    ErrorResponse
+    ErrorResponse,
 )
 
 __all__ = [
@@ -26,6 +27,7 @@ __all__ = [
     "reset_user_password",
     "get_user_profile",
     "ensure_user_in_database",
+    "update_user_password",
     # Routes
     "auth_router",
     # Models

@@ -44,3 +44,14 @@ class ErrorResponse(BaseModel):
     """Error response model."""
     error: str
     detail: Optional[str] = None
+class UpdatePasswordRequest(BaseModel):
+    """Model for updating password after reset link is clicked."""
+    access_token: str = Field(..., description="Access token from the reset email link")
+    refresh_token: str = Field(..., description="Refresh token from the reset email link")
+    password: str = Field(..., min_length=6)
+    confirm_password: str = Field(..., min_length=6)
+
+
+class UpdatePasswordResponse(BaseModel):
+    success: bool
+    message: Optional[str] = None
