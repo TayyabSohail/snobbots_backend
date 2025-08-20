@@ -50,7 +50,8 @@ async def register(user_data: RegisterRequest):
         logger.info(f"User {user_data.email} registered successfully")
         return AuthResponse(
             success=True,
-            message="User registered successfully. You can now log in."
+            message="User registered successfully. You can now log in.",
+            user=result.get('user')
         )
     
     except HTTPException:
@@ -84,7 +85,8 @@ async def login(user_data: LoginRequest):
         logger.info(f"User {user_data.email} logged in successfully")
         return AuthResponse(
             success=True,
-            message="Login successful"
+            message="Login successful",
+            user=result.get('user')
         )
     
     except HTTPException:
@@ -198,16 +200,38 @@ async def auth_callback(request: Request):
                     'approved': True  # Google users are pre-approved
                 }
                 
-                await ensure_user_in_database(user_data)
+                user_result = await ensure_user_in_database(user_data)
                 logger.info(f"Google user {user_data['email']} ensured in registered_users table")
+                
+                # Return structured response with user data
+                return JSONResponse({
+                    'success': True,
+                    'message': 'OAuth authentication successful',
+                    'user': user_result['user'],
+                    'access_token': session.access_token,
+                    'refresh_token': session.refresh_token
+                })
                 
             except Exception as e:
                 logger.error(f"Failed to ensure Google user in database: {str(e)}")
                 # Don't fail the auth, but log the error
                 # The user can still authenticate, they just won't be in our custom table
+                return JSONResponse({
+                    'success': True,
+                    'message': 'OAuth authentication successful',
+                    'user': None,
+                    'access_token': session.access_token,
+                    'refresh_token': session.refresh_token
+                })
 
         logger.info("OAuth authentication successful")
-        return JSONResponse(session)  # Contains access_token, user info
+        return JSONResponse({
+            'success': True,
+            'message': 'OAuth authentication successful',
+            'user': None,
+            'access_token': session.access_token,
+            'refresh_token': session.refresh_token
+        })
         
     except HTTPException:
         raise
@@ -216,6 +240,34 @@ async def auth_callback(request: Request):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error during OAuth callback"
+        )
+
+@auth_router.get(
+    "/profile/{user_id}",
+    summary="Get user profile",
+    description="Get user profile from registered_users table"
+)
+async def get_user_profile(user_id: str):
+    """Get user profile from registered_users table."""
+    try:
+        from .auth_service import get_user_profile
+        
+        user_profile = await get_user_profile(user_id)
+        if not user_profile:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User profile not found"
+            )
+        
+        return user_profile
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error while retrieving user profile: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error while retrieving user profile"
         )
 
 @auth_router.get(
