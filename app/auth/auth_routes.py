@@ -9,12 +9,14 @@ from .models import (
     LoginRequest, 
     ResetPasswordRequest,
     AuthResponse,
-    ErrorResponse
+    UpdatePasswordRequest,
+    UpdatePasswordResponse,
 )
 from .auth_service import (
     register_user,
     login_user,
     reset_user_password,
+    update_user_password,
     ensure_user_in_database
 )
 from app.supabase.supabase_client import get_supabase_client
@@ -63,6 +65,36 @@ async def register(user_data: RegisterRequest):
             detail="Internal server error during registration"
         )
 
+@auth_router.post(
+    "/update-password",
+    response_model=UpdatePasswordResponse,
+    summary="Update password after reset",
+    description="Update user password using tokens from the reset email link"
+)
+async def update_password(data: UpdatePasswordRequest):
+    """Update user password after reset link click."""
+    if data.password != data.confirm_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Passwords do not match"
+        )
+
+    result = await update_user_password(
+        data.access_token,
+        data.refresh_token,
+        data.password
+    )
+
+    if "error" in result:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=result["error"]
+        )
+
+    return UpdatePasswordResponse(
+        success=True,
+        message="Password updated successfully"
+    )
 
 @auth_router.post(
     "/login",
