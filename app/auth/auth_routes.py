@@ -14,7 +14,8 @@ from .models import (
 from .auth_service import (
     register_user,
     login_user,
-    reset_user_password
+    reset_user_password,
+    ensure_user_in_database
 )
 from app.supabase.supabase_client import get_supabase_client
 from app.core.config import settings
@@ -129,7 +130,6 @@ async def reset_password(reset_data: ResetPasswordRequest):
             detail="Internal server error during password reset"
         )
 
-
 @auth_router.get(
     "/health",
     summary="Health check",
@@ -187,6 +187,24 @@ async def auth_callback(request: Request):
                 status_code=status.HTTP_400_BAD_REQUEST, 
                 detail="Authentication failed"
             )
+
+        # Ensure the Google user is added to our registered_users table
+        if session.user:
+            try:
+                user_data = {
+                    'id': session.user.id,
+                    'email': session.user.email,
+                    'name': session.user.user_metadata.get('full_name', session.user.email),
+                    'approved': True  # Google users are pre-approved
+                }
+                
+                await ensure_user_in_database(user_data)
+                logger.info(f"Google user {user_data['email']} ensured in registered_users table")
+                
+            except Exception as e:
+                logger.error(f"Failed to ensure Google user in database: {str(e)}")
+                # Don't fail the auth, but log the error
+                # The user can still authenticate, they just won't be in our custom table
 
         logger.info("OAuth authentication successful")
         return JSONResponse(session)  # Contains access_token, user info
