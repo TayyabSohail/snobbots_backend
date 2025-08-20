@@ -220,7 +220,7 @@ async def me(authorization: str = Depends(lambda request: request.headers.get("A
             f"{settings.supabase_url}/auth/v1/user",
             headers={
                 "Authorization": f"Bearer {token}", 
-                "apikey": settings.supabase_anon_key
+                "apikey": settings.supabase_service_role_key
             },
         )
         
