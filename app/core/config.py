@@ -21,6 +21,12 @@ class Settings(BaseSettings):
     api_prefix: str = Field(default="/api", env="API_PREFIX")
     cors_origins: list[str] = Field(default=["*"], env="CORS_ORIGINS")
     
+# Frontend Configuration
+    frontend_url: str = Field(
+        default="https://dolihvpjrbkajwkmvmcp.supabase.co",
+        env="FRONTEND_URL"
+    )
+
     class Config:
         env_file = ".env"
         case_sensitive = False

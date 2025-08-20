@@ -86,14 +86,17 @@ async def register_user(register_data: RegisterRequest) -> Dict[str, Any]:
         
         # Add user to registered_users table
         try:
-            await ensure_user_in_database({
+            user_result = await ensure_user_in_database({
                 'id': auth_response.user.id,
                 'email': register_data.email,
                 'name': register_data.name,
                 'approved': True
             })
             
-            return {'success': True}
+            return {
+                'success': True,
+                'user': user_result['user']
+            }
             
         except Exception as e:
             logger.error(f"User created but failed to add to whitelist: {str(e)}")
@@ -112,7 +115,7 @@ async def login_user(login_data: LoginRequest) -> Dict[str, Any]:
         login_data: User login data
         
     Returns:
-        Dictionary with login result
+        Dictionary with login result and user data
     """
     supabase = get_supabase_client()
     
@@ -126,9 +129,9 @@ async def login_user(login_data: LoginRequest) -> Dict[str, Any]:
         if hasattr(auth_response, 'error') and auth_response.error:
             return {'error': auth_response.error.message}
         
-        # Check if user exists in registered_users table
+        # Check if user exists in registered_users table and get their data
         user_response = supabase.table('registered_users') \
-            .select('id') \
+            .select('*') \
             .eq('email', login_data.email) \
             .maybe_single() \
             .execute()
@@ -136,7 +139,10 @@ async def login_user(login_data: LoginRequest) -> Dict[str, Any]:
         if not user_response.data:
             return {'error': 'You are not authorized to log in'}
         
-        return {'success': True}
+        return {
+            'success': True,
+            'user': user_response.data
+        }
     
     except Exception as e:
         logger.error(f"Login error: {str(e)}")
