@@ -174,7 +174,6 @@ async def health_check():
     return {"status": "healthy", "service": "auth"}
 
 # Google OAuth Authentication Routes
-
 @auth_router.get(
     "/login/google",
     summary="Start Google OAuth login",
@@ -183,7 +182,8 @@ async def health_check():
 async def login_google():
     """Start Google OAuth login process."""
     try:
-        redirect_url = f"{settings.frontend_url}/auth/callback" if hasattr(settings, 'frontend_url') else "http://localhost:8000/auth/callback"
+        redirect_url = "http://localhost:8000/api/auth/callback"
+        #redirect_url = f"{settings.backend_url}/api/auth/callback" if hasattr(settings, 'backend_url') else "http://localhost:8000/api/auth/callback"
         res = supabase.auth.sign_in_with_oauth(
             {
                 "provider": "google",
@@ -209,70 +209,43 @@ async def auth_callback(request: Request):
         code = request.query_params.get("code")
         if not code:
             logger.warning("OAuth callback received without authorization code")
-            return JSONResponse(
-                {"error": "No authorization code in callback"}, 
-                status_code=status.HTTP_400_BAD_REQUEST
-            )
+            return RedirectResponse("https://snobbots.vercel.app/login?error=no_code")
 
-        session = supabase.auth.exchange_code_for_session({"auth_code": code})
-        if not session:
+        # Exchange code for session (returns AuthResponse, not direct session)
+        auth_response = supabase.auth.exchange_code_for_session({"auth_code": code})
+
+        if not auth_response or not auth_response.session:
             logger.error("Failed to exchange authorization code for session")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, 
-                detail="Authentication failed"
-            )
+            return RedirectResponse("https://snobbots.vercel.app/login?error=auth_failed")
 
-        # Ensure the Google user is added to our registered_users table
+        session = auth_response.session  
+
+        # Ensure user exists in DB
         if session.user:
             try:
                 user_data = {
-                    'id': session.user.id,
-                    'email': session.user.email,
-                    'name': session.user.user_metadata.get('full_name', session.user.email),
-                    'approved': True  # Google users are pre-approved
+                    "id": session.user.id,
+                    "email": session.user.email,
+                    "name": session.user.user_metadata.get("full_name", session.user.email),
+                    "approved": True,
                 }
-                
-                user_result = await ensure_user_in_database(user_data)
-                logger.info(f"Google user {user_data['email']} ensured in registered_users table")
-                
-                # Return structured response with user data
-                return JSONResponse({
-                    'success': True,
-                    'message': 'OAuth authentication successful',
-                    'user': user_result['user'],
-                    'access_token': session.access_token,
-                    'refresh_token': session.refresh_token
-                })
-                
+                await ensure_user_in_database(user_data)
+                logger.info(f"Google user ensured in DB: {user_data['email']}")
             except Exception as e:
-                logger.error(f"Failed to ensure Google user in database: {str(e)}")
-                # Don't fail the auth, but log the error
-                # The user can still authenticate, they just won't be in our custom table
-                return JSONResponse({
-                    'success': True,
-                    'message': 'OAuth authentication successful',
-                    'user': None,
-                    'access_token': session.access_token,
-                    'refresh_token': session.refresh_token
-                })
+                logger.error(f"DB insert failed for Google user: {str(e)}")
+                # continue anyway
 
-        logger.info("OAuth authentication successful")
-        return JSONResponse({
-            'success': True,
-            'message': 'OAuth authentication successful',
-            'user': None,
-            'access_token': session.access_token,
-            'refresh_token': session.refresh_token
-        })
-        
-    except HTTPException:
-        raise
+        # Redirect to frontend with tokens
+        frontend_url = (
+            f"https://snobbots.vercel.app/dashboard?"
+            f"access_token={session.access_token}&refresh_token={session.refresh_token}"
+        )
+        logger.info(f"OAuth success, redirecting user {session.user.email} to dashboard")
+        return RedirectResponse(url=frontend_url, status_code=303)
+
     except Exception as e:
         logger.error(f"Unexpected error during OAuth callback: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error during OAuth callback"
-        )
+        return RedirectResponse("https://snobbots.vercel.app/login?error=server_error")
 
 @auth_router.get(
     "/profile/{user_id}",
