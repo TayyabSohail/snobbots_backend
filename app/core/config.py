@@ -26,6 +26,10 @@ class Settings(BaseSettings):
         default="https://dolihvpjrbkajwkmvmcp.supabase.co",
         env="FRONTEND_URL"
     )
+    backend_url: str = Field(
+        default="http://localhost:8000",
+        env="BACKEND_URL"
+    )
 
     class Config:
         env_file = ".env"

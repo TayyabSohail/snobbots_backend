@@ -162,8 +162,14 @@ async def reset_user_password(email: str) -> Dict[str, Any]:
     supabase = get_supabase_client()
     
     try:
-        response = supabase.auth.reset_password_email(email)
+        response = supabase.auth.reset_password_for_email(
+            email,
+            {
+                "redirect_to": "https://snobbots.vercel.app/reset-password"
+            }
+        )
         
+        # Supabase client returns a `PostgrestResponse` or AuthResponse type
         if hasattr(response, 'error') and response.error:
             return {'error': response.error.message}
         
@@ -172,6 +178,7 @@ async def reset_user_password(email: str) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Password reset error: {str(e)}")
         return {'error': str(e)}
+
 
 
 async def get_user_profile(user_id: str) -> Optional[UserResponse]:

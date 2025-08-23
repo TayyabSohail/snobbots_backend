@@ -182,8 +182,8 @@ async def health_check():
 async def login_google():
     """Start Google OAuth login process."""
     try:
-        redirect_url = "http://localhost:8000/api/auth/callback"
-        #redirect_url = f"{settings.backend_url}/api/auth/callback" if hasattr(settings, 'backend_url') else "http://localhost:8000/api/auth/callback"
+        # redirect_url = "http://localhost:8000/api/auth/callback"
+        redirect_url = f"{settings.backend_url}/api/auth/callback" if hasattr(settings, 'backend_url') else "http://localhost:8000/api/auth/callback"
         res = supabase.auth.sign_in_with_oauth(
             {
                 "provider": "google",
