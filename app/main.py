@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.core.config import settings
 from app.auth import auth_router
+from pinecone import Pinecone
 
 
 # ---------------------------
@@ -30,16 +31,20 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ---------------------------
-# Environment + Mistral Setup
+# Environment + Mistral + Pinecone Setup
 # ---------------------------
 load_dotenv()
 API_KEY = os.getenv("MISTRAL_API_KEY")
 client = Mistral(api_key=API_KEY)
 
-# Load FAISS index and chunks
-index = faiss.read_index("output_data/faiss.index")
-with open("output_data/chunks.pkl", "rb") as f:
-    chunks = pickle.load(f)
+# Initialize Pinecone client
+pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+
+INDEX_NAME = "snobbots-index"
+
+
+# Connect to existing index
+index = pc.Index(INDEX_NAME)
 
 
 # ---------------------------
@@ -92,20 +97,25 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 # ---------------------------
-# Mistral RAG Helper
+# Mistral RAG Helper with Pinecone
 # ---------------------------
 def generate_response(query: str):
     # 1. Get embeddings
     embed_resp = client.embeddings.create(model="mistral-embed", inputs=[query])
-    query_embedding = np.array(embed_resp.data[0].embedding, dtype="float32").reshape(1, -1)
+    query_embedding = embed_resp.data[0].embedding
 
-    # 2. Search FAISS
-    _, indices = index.search(query_embedding, 3)
-    top_chunks = [chunks[i] for i in indices[0]]
+    # 2. Search Pinecone
+    results = index.query(
+        vector=query_embedding,
+        top_k=3,
+        include_metadata=True
+    )
+    top_chunks = [match["metadata"]["text"] for match in results["matches"]]
     context = "\n\n".join(top_chunks)
-
     # 3. Prompt
-    prompt = f"""You are a helpful chatbot assistant who replies to all the queries related to the context provided. Use the context provided to answer their queries.
+    prompt = f"""You are a helpful chatbot assistant who replies to all the queries related to the context provided. 
+Use the context provided to answer their queries.
+
 Context:
 {context}
 
@@ -120,15 +130,17 @@ Answer:"""
         messages=[{"role": "user", "content": prompt}],
         stream=True
     )
+
+    # ✅ Yield only non-empty chunks
     for event in stream:
         if event.choices and event.choices[0].delta:
-            yield event.choices[0].delta.content or ""
-
+            chunk = event.choices[0].delta.content
+            if chunk and chunk.strip():
+                yield chunk
 
 # ---------------------------
 # Endpoints
 # ---------------------------
-# RAG Query Endpoint
 @app.post("/ask")
 async def ask(request: Request):
     data = await request.json()
@@ -136,8 +148,11 @@ async def ask(request: Request):
     if not query:
         return JSONResponse({"error": "Query is required"}, status_code=400)
 
-    return StreamingResponse(generate_response(query), media_type="text/plain", headers={"X-Accel-Buffering": "no"})
-
+    return StreamingResponse(
+        generate_response(query),  # sync generator works fine here
+        media_type="text/plain",
+        headers={"X-Accel-Buffering": "no"}
+    )
 
 # Supabase Auth Router
 app.include_router(auth_router, prefix=settings.api_prefix)
@@ -169,11 +184,10 @@ async def health_check():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
-        "app:app",
+        "app.main:app",
         host="0.0.0.0",
         port=8000,
         reload=settings.debug,
         log_level="info"
     )
 
-    

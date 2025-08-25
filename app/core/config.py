@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     supabase_url: str = Field(..., env="SUPABASE_URL")
     supabase_anon_key: str = Field(..., env="SUPABASE_ANON_KEY")
     supabase_service_role_key: str = Field(..., env="SUPABASE_SERVICE_ROLE_KEY")
+    mistral_api_key:str
+    pinecone_api_key:str
     
     # App Configuration
     debug: bool = Field(default=False, env="DEBUG")
