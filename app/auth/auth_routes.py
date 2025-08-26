@@ -280,37 +280,44 @@ async def get_user_profile(user_id: str):
     summary="Get current user info",
     description="Protected endpoint to get current authenticated user information"
 )
-async def me(authorization: str = Depends(lambda request: request.headers.get("Authorization"))):
+async def me(request: Request):
     """Get current authenticated user information."""
     try:
+        # Extract Authorization header
+        authorization: str = request.headers.get("Authorization")
+
         if not authorization:
             logger.warning("Protected endpoint accessed without authorization header")
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED, 
+                status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Missing authorization token"
             )
 
-        token = authorization.replace("Bearer ", "")
+        # Remove "Bearer " prefix
+        token = authorization.replace("Bearer ", "").strip()
+
+        # Call Supabase Auth API to validate the token and fetch user
         resp = requests.get(
             f"{settings.supabase_url}/auth/v1/user",
             headers={
-                "Authorization": f"Bearer {token}", 
+                "Authorization": f"Bearer {token}",
                 "apikey": settings.supabase_service_role_key
             },
         )
-        
+
         if resp.status_code != 200:
-            logger.warning(f"Invalid token provided: {resp.status_code}")
+            logger.warning(f"Invalid token provided: {resp.status_code} {resp.text}")
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED, 
+                status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or expired token"
             )
 
         user_data = resp.json()
         logger.info(f"User info retrieved successfully for user ID: {user_data.get('id')}")
         return user_data
-        
+
     except HTTPException:
+        # re-raise HTTP errors without wrapping
         raise
     except Exception as e:
         logger.error(f"Unexpected error while retrieving user info: {str(e)}")
