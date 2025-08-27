@@ -209,14 +209,17 @@ async def auth_callback(request: Request):
         code = request.query_params.get("code")
         if not code:
             logger.warning("OAuth callback received without authorization code")
-            return RedirectResponse("https://snobbots.vercel.app/login?error=no_code")
+            # Use frontend URL from settings
+            frontend_login = f"{settings.frontend_url}/login?error=no_code"
+            return RedirectResponse(frontend_login)
 
-        # Exchange code for session (returns AuthResponse, not direct session)
+        # Exchange code for session
         auth_response = supabase.auth.exchange_code_for_session({"auth_code": code})
 
         if not auth_response or not auth_response.session:
             logger.error("Failed to exchange authorization code for session")
-            return RedirectResponse("https://snobbots.vercel.app/login?error=auth_failed")
+            frontend_login = f"{settings.frontend_url}/login?error=auth_failed"
+            return RedirectResponse(frontend_login)
 
         session = auth_response.session  
 
@@ -235,17 +238,19 @@ async def auth_callback(request: Request):
                 logger.error(f"DB insert failed for Google user: {str(e)}")
                 # continue anyway
 
-        # Redirect to frontend with tokens
-        frontend_url = (
-            f"https://snobbots.vercel.app/dashboard?"
+        # Redirect to frontend dashboard with tokens
+        frontend_dashboard = (
+            f"{settings.frontend_url}/dashboard?"
             f"access_token={session.access_token}&refresh_token={session.refresh_token}"
         )
         logger.info(f"OAuth success, redirecting user {session.user.email} to dashboard")
-        return RedirectResponse(url=frontend_url, status_code=303)
+        return RedirectResponse(url=frontend_dashboard, status_code=303)
 
     except Exception as e:
         logger.error(f"Unexpected error during OAuth callback: {str(e)}")
-        return RedirectResponse("https://snobbots.vercel.app/login?error=server_error")
+        frontend_login = f"{settings.frontend_url}/login?error=server_error"
+        return RedirectResponse(frontend_login)
+
 
 @auth_router.get(
     "/profile/{user_id}",
