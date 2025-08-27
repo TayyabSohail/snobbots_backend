@@ -1,6 +1,5 @@
 import os
-import faiss
-import pickle
+import requests
 import numpy as np
 import json
 import logging
@@ -16,6 +15,9 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from app.core.config import settings
 from app.auth import auth_router
 from pinecone import Pinecone
+from pydantic import BaseModel
+from fastapi.responses import JSONResponse
+
 
 
 # ---------------------------
@@ -34,8 +36,8 @@ logger = logging.getLogger(__name__)
 # Environment + Mistral + Pinecone Setup
 # ---------------------------
 load_dotenv()
-API_KEY = os.getenv("MISTRAL_API_KEY")
-client = Mistral(api_key=API_KEY)
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
+client = Mistral(api_key=MISTRAL_API_KEY)
 
 # Initialize Pinecone client
 pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
@@ -74,7 +76,7 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
+    allow_origins=["*"],   # or ["http://localhost:3000"] if frontend runs there
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -99,6 +101,9 @@ async def global_exception_handler(request: Request, exc: Exception):
 # ---------------------------
 # Mistral RAG Helper with Pinecone
 # ---------------------------
+class QueryRequest(BaseModel):
+    query: str
+    
 def generate_response(query: str):
     # 1. Get embeddings
     embed_resp = client.embeddings.create(model="mistral-embed", inputs=[query])
@@ -110,8 +115,9 @@ def generate_response(query: str):
         top_k=3,
         include_metadata=True
     )
-    top_chunks = [match["metadata"]["text"] for match in results["matches"]]
+    top_chunks = [match["metadata"]["chunk_text"] for match in results["matches"]]
     context = "\n\n".join(top_chunks)
+
     # 3. Prompt
     prompt = f"""You are a helpful chatbot assistant who replies to all the queries related to the context provided. 
 Use the context provided to answer their queries.
@@ -124,35 +130,42 @@ Question:
 
 Answer:"""
 
-    # 4. Stream from Mistral
-    stream = client.chat.complete(
-        model="mistral-large-latest",
-        messages=[{"role": "user", "content": prompt}],
-        stream=True
-    )
+    url = "https://api.mistral.ai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {MISTRAL_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "model": "mistral-small-latest",
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": True
+    }
 
-    # ✅ Yield only non-empty chunks
-    for event in stream:
-        if event.choices and event.choices[0].delta:
-            chunk = event.choices[0].delta.content
-            if chunk and chunk.strip():
-                yield chunk
+    with requests.post(url, headers=headers, json=data, stream=True) as r:
+        for line in r.iter_lines():
+            if line:
+                decoded = line.decode("utf-8").strip()
+                if not decoded.startswith("data: "):
+                    continue
 
+                payload = decoded[len("data: "):]
+                if payload == "[DONE]":
+                    break
+
+                obj = json.loads(payload)
+                delta = obj["choices"][0]["delta"].get("content")
+                if delta:
+                    yield delta
 # ---------------------------
 # Endpoints
 # ---------------------------
-@app.post("/ask")
-async def ask(request: Request):
-    data = await request.json()
-    query = data.get("query")
-    if not query:
-        return JSONResponse({"error": "Query is required"}, status_code=400)
 
-    return StreamingResponse(
-        generate_response(query),  # sync generator works fine here
-        media_type="text/plain",
-        headers={"X-Accel-Buffering": "no"}
-    )
+
+@app.post("/ask")
+async def ask(request: QueryRequest):
+    full_text = "".join([chunk for chunk in generate_response(request.query)])
+    return JSONResponse({"answer": full_text})
+
 
 # Supabase Auth Router
 app.include_router(auth_router, prefix=settings.api_prefix)
