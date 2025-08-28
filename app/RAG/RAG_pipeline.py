@@ -22,10 +22,10 @@ pc = Pinecone(api_key=PINECONE_API_KEY)
 if INDEX_NAME not in pc.list_indexes().names():
     pc.create_index(
         name=INDEX_NAME,
-        dimension=3072,           # OpenAI text-embedding-3-large = 3072 dims
+        dimension=3072,
         metric="cosine",
         spec=ServerlessSpec(
-            cloud="aws",          # or "gcp"
+            cloud="aws", 
             region="us-east-1"
         )
     )
@@ -61,4 +61,4 @@ for i, chunk in enumerate(chunks):
 
 index.upsert(vectors=vectors)
 
-print(f"✅ Indexed {len(chunks)} chunks into Pinecone with OpenAI embeddings")
+print(f"Indexed {len(chunks)} chunks into Pinecone with OpenAI embeddings")

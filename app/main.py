@@ -6,11 +6,11 @@ import logging
 import sys
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
-from mistralai import Mistral
+from openai import OpenAI
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.auth import auth_router
@@ -33,11 +33,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ---------------------------
-# Environment + Mistral + Pinecone Setup
+# Environment + OpenAI + Pinecone Setup
 # ---------------------------
 load_dotenv()
-MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
-client = Mistral(api_key=MISTRAL_API_KEY)
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # Initialize Pinecone client
 pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
@@ -67,7 +66,7 @@ async def lifespan(app: FastAPI):
 # ---------------------------
 app = FastAPI(
     title="Snobbots Backend API",
-    description="Backend API for Snobbots with Supabase Authentication + Mistral RAG",
+    description="Backend API for Snobbots with Supabase Authentication + OpenAI RAG",
     version="1.0.0",
     debug=settings.debug,
     lifespan=lifespan
@@ -99,14 +98,17 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 # ---------------------------
-# Mistral RAG Helper with Pinecone
+# OpenAI RAG Helper with Pinecone
 # ---------------------------
 class QueryRequest(BaseModel):
     query: str
     
 def generate_response(query: str):
-    # 1. Get embeddings
-    embed_resp = client.embeddings.create(model="mistral-embed", inputs=[query])
+    # 1. Get embeddings from OpenAI
+    embed_resp = client.embeddings.create(
+        model="text-embedding-3-large",  # or "text-embedding-3-small"
+        input=query
+    )
     query_embedding = embed_resp.data[0].embedding
 
     # 2. Search Pinecone
@@ -119,8 +121,8 @@ def generate_response(query: str):
     context = "\n\n".join(top_chunks)
 
     # 3. Prompt
-    prompt = f"""You are a helpful chatbot assistant who replies to all the queries related to the context provided. 
-Use the context provided to answer their queries.
+    prompt = f"""You are a helpful chatbot assistant who replies to all queries using the provided context. 
+If the answer cannot be found in the context, say you don't know.
 
 Context:
 {context}
@@ -130,32 +132,16 @@ Question:
 
 Answer:"""
 
-    url = "https://api.mistral.ai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {MISTRAL_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "model": "mistral-small-latest",
-        "messages": [{"role": "user", "content": prompt}],
-        "stream": True
-    }
+    # 4. Stream response from OpenAI Chat API
+    stream = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        stream=True
+    )
 
-    with requests.post(url, headers=headers, json=data, stream=True) as r:
-        for line in r.iter_lines():
-            if line:
-                decoded = line.decode("utf-8").strip()
-                if not decoded.startswith("data: "):
-                    continue
-
-                payload = decoded[len("data: "):]
-                if payload == "[DONE]":
-                    break
-
-                obj = json.loads(payload)
-                delta = obj["choices"][0]["delta"].get("content")
-                if delta:
-                    yield delta
+    for chunk in stream:
+        if chunk.choices[0].delta.content:
+            yield chunk.choices[0].delta.content
 # ---------------------------
 # Endpoints
 # ---------------------------
