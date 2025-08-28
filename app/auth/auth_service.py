@@ -67,9 +67,8 @@ async def register_user(register_data: RegisterRequest) -> Dict[str, Any]:
         Dictionary with registration result
     """
     supabase = get_supabase_client()
-    auth_response
     try:
-        # Sign up user with Supabase Auth (no email verification)
+        # Sign up user with Supabase Auth
         auth_response = supabase.auth.sign_up({
             'email': register_data.email,
             'password': register_data.password,
@@ -77,17 +76,20 @@ async def register_user(register_data: RegisterRequest) -> Dict[str, Any]:
                 'data': {'name': register_data.name},
             }
         })
-        
+
         # Handle error if user already exists
         if hasattr(auth_response, 'error') and auth_response.error:
-            error_msg = auth_response.error.message
-            if "already registered" in error_msg or "already exists" in error_msg or "duplicate" in error_msg:
+            error_msg = auth_response.error.message.lower()
+            if ("already registered" in error_msg or "already exists" in error_msg or "duplicate" in error_msg or "user already" in error_msg):
+                logger.info(f"Duplicate registration attempt for {register_data.email}")
                 return {'error': 'User with this email already exists. Please log in or reset your password.'}
+            logger.error(f"Registration error for {register_data.email}: {error_msg}")
             return {'error': error_msg}
 
         if auth_response.user is None:
+            logger.error(f"Signup failed for {register_data.email}: Unknown error.")
             return {'error': "Signup failed. Unknown error."}
-        
+
         # Add user to registered_users table
         try:
             user_result = await ensure_user_in_database({
@@ -96,19 +98,21 @@ async def register_user(register_data: RegisterRequest) -> Dict[str, Any]:
                 'name': register_data.name,
                 'approved': True
             })
-            
             return {
                 'success': True,
                 'user': user_result['user']
             }
-            
         except Exception as e:
             logger.error(f"User created but failed to add to whitelist: {str(e)}")
             return {'error': 'User created but failed to add to whitelist.'}
-    
+
     except Exception as e:
-        logger.error(f"Registration error: {str(e)}")
-        return {'error': str(e)}
+        error_msg = str(e).lower()
+        if ("already registered" in error_msg or "already exists" in error_msg or "duplicate" in error_msg or "user already" in error_msg):
+            logger.info(f"Duplicate registration attempt for {register_data.email} (exception)")
+            return {'error': 'User with this email already exists. Please log in or reset your password.'}
+        logger.error(f"Unexpected registration error for {register_data.email}: {str(e)}")
+        return {'error': 'Registration failed due to an unexpected error.'}
 
 
 async def login_user(login_data: LoginRequest) -> Dict[str, Any]:
@@ -176,7 +180,6 @@ async def reset_user_password(email: str) -> Dict[str, Any]:
         # Supabase client returns a `PostgrestResponse` or AuthResponse type
         if hasattr(response, 'error') and response.error:
             return {'error': response.error.message}
-        
         return {'success': True, 'message': 'Password reset email sent'}
     
     except Exception as e:
