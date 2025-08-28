@@ -94,15 +94,16 @@ async def register_user(register_data: RegisterRequest) -> Dict[str, Any]:
         try:
             # Check if user already exists in registered_users
             supabase_admin = get_admin_supabase_client()
-            existing_user_response = supabase_admin.table('registered_users') \
-                .select('id') \
-                .eq('email', register_data.email) \
-                .maybe_single() \
+            existing_user_response = (
+                supabase_admin.table("registered_users")
+                .select("id")
+                .eq("email", register_data.email)
                 .execute()
+            )
 
-            if existing_user_response.data:
+            if existing_user_response.data and len(existing_user_response.data) > 0:
                 logger.info(f"Duplicate registration attempt for {register_data.email} (already in registered_users)")
-                return {'error': 'User with this email already exists. Please log in or reset your password.'}
+                return {"error": "User with this email already exists. Please log in or reset your password."}
 
             user_result = await ensure_user_in_database({
                 'id': auth_response.user.id,
@@ -154,11 +155,13 @@ async def login_user(login_data: LoginRequest) -> Dict[str, Any]:
             return {'error': auth_response.error.message}
         
         # Check if user exists in registered_users table and get their data
-        user_response = supabase.table('registered_users') \
-            .select('*') \
-            .eq('email', login_data.email) \
-            .maybe_single() \
+        user_response = (
+            supabase.table("registered_users")
+            .select("*")
+            .eq("email", login_data.email)
+            .single()
             .execute()
+        )
         
         if not user_response.data:
             return {'error': 'You are not authorized to log in'}
