@@ -1,5 +1,4 @@
 """Main FastAPI application with Supabase authentication."""
-
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -72,9 +71,9 @@ app.include_router(auth_router, prefix=settings.api_prefix)
 
 
 # Root endpoint
-@app.get("/", methods=["GET", "HEAD"])
+
+@app.api_route("/", methods=["GET", "HEAD"])
 async def root():
-    """Root endpoint."""
     return {
         "message": "Snobbots Backend API",
         "version": "1.0.0",
