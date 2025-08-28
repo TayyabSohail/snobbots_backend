@@ -72,7 +72,7 @@ app.include_router(auth_router, prefix=settings.api_prefix)
 
 
 # Root endpoint
-@app.get("/")
+@app.get("/", methods=["GET", "HEAD"])
 async def root():
     """Root endpoint."""
     return {
