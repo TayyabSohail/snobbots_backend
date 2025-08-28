@@ -24,3 +24,4 @@ Flask==3.1.1
 flask-cors==1.4.0
 mistralai
 pinecone
+openai
