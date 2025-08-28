@@ -117,15 +117,19 @@ async def register_user(register_data: RegisterRequest) -> Dict[str, Any]:
         except Exception as e:
             logger.error(f"User created but failed to add to whitelist: {str(e)}")
             return {'error': 'User created but failed to add to whitelist.'}
-
     except Exception as e:
         error_msg = str(e).lower()
-        if ("already registered" in error_msg or "already exists" in error_msg or "duplicate" in error_msg or "user already" in error_msg):
-            logger.info(f"Duplicate registration attempt for {register_data.email} (exception)")
-            return {'error': 'User with this email already exists. Please log in or reset your password.'}
-        logger.error(f"Unexpected registration error for {register_data.email}: {str(e)}")
-        return {'error': 'Registration failed due to an unexpected error.'}
 
+        # ✅ Case 1: user already exists
+        if any(x in error_msg for x in [
+            "already registered", "already exists", "duplicate", "user already"
+        ]):
+            logger.info(f"Duplicate registration attempt for {register_data.email} (exception)")
+            return {"error": "User with this email already exists. Please log in or reset your password."}
+
+        # ✅ Case 2: any other unexpected error → log + return real message
+        logger.error(f"Unexpected registration error for {register_data.email}: {repr(e)}")
+        return {"error": str(e)}
 
 async def login_user(login_data: LoginRequest) -> Dict[str, Any]:
     """
