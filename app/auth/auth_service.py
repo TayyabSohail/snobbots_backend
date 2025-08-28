@@ -3,6 +3,7 @@
 from typing import Dict, Any, Optional
 import logging
 from app.supabase import get_supabase_client, get_admin_supabase_client
+from app.core.config import settings
 from .models import RegisterRequest, LoginRequest, UserResponse
 
 logger = logging.getLogger(__name__)
@@ -66,7 +67,7 @@ async def register_user(register_data: RegisterRequest) -> Dict[str, Any]:
         Dictionary with registration result
     """
     supabase = get_supabase_client()
-    
+    auth_response
     try:
         # Sign up user with Supabase Auth (no email verification)
         auth_response = supabase.auth.sign_up({
@@ -74,7 +75,6 @@ async def register_user(register_data: RegisterRequest) -> Dict[str, Any]:
             'password': register_data.password,
             'options': {
                 'data': {'name': register_data.name},
-                'email_confirm': False  # Disable email verification
             }
         })
         
@@ -165,7 +165,7 @@ async def reset_user_password(email: str) -> Dict[str, Any]:
         response = supabase.auth.reset_password_for_email(
             email,
             {
-                "redirect_to": "https://snobbots.vercel.app/reset-password"
+                "redirect_to": f"{settings.frontend_url}/reset-password"
             }
         )
         

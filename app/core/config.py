@@ -3,6 +3,7 @@
 from pydantic_settings import BaseSettings
 from pydantic import Field
 from typing import Optional
+import os
 
 
 class Settings(BaseSettings):
@@ -21,15 +22,8 @@ class Settings(BaseSettings):
     api_prefix: str = Field(default="/api", env="API_PREFIX")
     cors_origins: list[str] = Field(default=["*"], env="CORS_ORIGINS")
     
-# Frontend Configuration
-    frontend_url: str = Field(
-        default="https://dolihvpjrbkajwkmvmcp.supabase.co",
-        env="FRONTEND_URL"
-    )
-    backend_url: str = Field(
-        default="http://localhost:8000",
-        env="BACKEND_URL"
-    )
+    frontend_url: str = os.getenv("FRONTEND_URL")
+    backend_url: str = os.getenv("BACKEND_URL")
 
     class Config:
         env_file = ".env"
