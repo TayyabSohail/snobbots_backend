@@ -78,11 +78,15 @@ async def register_user(register_data: RegisterRequest) -> Dict[str, Any]:
             }
         })
         
-        if auth_response.user is None:
-            error_msg = "Signup failed"
-            if hasattr(auth_response, 'error') and auth_response.error:
-                error_msg = auth_response.error.message
+        # Handle error if user already exists
+        if hasattr(auth_response, 'error') and auth_response.error:
+            error_msg = auth_response.error.message
+            if "already registered" in error_msg or "already exists" in error_msg or "duplicate" in error_msg:
+                return {'error': 'User with this email already exists. Please log in or reset your password.'}
             return {'error': error_msg}
+
+        if auth_response.user is None:
+            return {'error': "Signup failed. Unknown error."}
         
         # Add user to registered_users table
         try:
