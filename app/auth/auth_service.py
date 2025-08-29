@@ -23,9 +23,10 @@ async def ensure_user_in_database(user_data: Dict[str, Any]) -> Dict[str, Any]:
     
     try:
         # Check if user already exists in registered_users
+        logger.info(f"Inserting user into whitelist: {user_data}")
         response = supabase.table('registered_users') \
             .select('id') \
-            .eq('id', user_data['id']) \
+            .or_(f"id.eq.{user_data['id']},email.eq.{user_data['email']}") \
             .execute()
         
         # If user doesn't exist, insert them
@@ -116,8 +117,9 @@ async def register_user(register_data: RegisterRequest) -> Dict[str, Any]:
                 'user': user_result['user']
             }
         except Exception as e:
-            logger.error(f"User created but failed to add to whitelist: {str(e)}")
-            return {'error': 'User created but failed to add to whitelist.'}
+            logger.error("User created but failed to add to whitelist", exc_info=True)
+            return {'error': f"Whitelist insert failed: {str(e)}"}
+
     except Exception as e:
         error_msg = str(e).lower()
 
@@ -142,7 +144,7 @@ async def login_user(login_data: LoginRequest) -> Dict[str, Any]:
     Returns:
         Dictionary with login result and user data
     """
-    supabase = get_supabase_client()
+    supabase = get_admin_supabase_client()  
     
     try:
         # Sign in with Supabase Auth
