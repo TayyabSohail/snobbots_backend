@@ -1,11 +1,8 @@
-"""Helper functions for working with Supabase responses."""
-
 from typing import Any, Dict
 import logging
 from app.helpers.response_helper import success_response, error_response
 
 logger = logging.getLogger(__name__)
-
 
 def handle_supabase_error(response: Any, default_error: str = "Unknown error") -> Dict[str, Any]:
     """
@@ -31,5 +28,6 @@ def handle_supabase_error(response: Any, default_error: str = "Unknown error") -
     # Case 3: All good → wrap into success response
     return success_response(
         message="Supabase request successful",
+        code="SUPABASE_OK",
         data=response.data
     )

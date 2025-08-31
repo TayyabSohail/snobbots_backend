@@ -1,17 +1,28 @@
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
-def success_response(data: Optional[Dict[str, Any]] = None, message: str = "Success") -> Dict[str, Any]:
+def success_response(
+    data: Optional[Dict[str, Any]] = None,
+    message: str = "Success",
+    code: str = "SUCCESS"
+) -> Dict[str, Any]:
     return {
         "success": True,
-        "data": data or {},
-        "error": None,
         "message": message,
+        "code": code,
+        "data": data or {},
+        "errors": []
     }
 
-def error_response(error: str, message: Optional[str] = None, data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def error_response(
+    message: str,
+    code: str = "ERROR",
+    data: Optional[Dict[str, Any]] = None,
+    errors: Optional[List[Dict[str, Any]]] = None
+) -> Dict[str, Any]:
     return {
         "success": False,
+        "message": message,
+        "code": code,
         "data": data or {},
-        "error": error,
-        "message": message or error,
+        "errors": errors or []
     }
