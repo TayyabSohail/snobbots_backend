@@ -52,7 +52,7 @@ async def register(user_data: RegisterRequest):
         logger.info(f"User {user_data.email} registered successfully")
         return AuthResponse(
             success=True,
-            message="User registered successfully. You can now log in.",
+            message="Please confirm your email to complete signup",
             user=result.get('user')
         )
     
