@@ -167,30 +167,16 @@ async def login_user(login_data: LoginRequest) -> Dict[str, Any]:
 async def reset_user_password(email: str) -> Dict[str, Any]:
     supabase = get_supabase_client()
     try:
-        response = supabase.auth.reset_password_for_email(
+        supabase.auth.reset_password_for_email(  
             email,
             {"redirect_to": f"{settings.frontend_url}/reset-password"}
         )
-
-        result = handle_supabase_error(response, default_error="Failed to send reset email")
-        if not result["success"]:
-            return result
-
-        return {
-            "success": True,
-            "message": "Password reset email sent successfully",
-            "error": None,
-            "user": None
-        }
+        # keep it minimal: route owns the response
+        return {"error": None}
 
     except Exception as e:
         logger.error(f"Password reset error: {str(e)}")
-        return {
-            "success": False,
-            "message": str(e),
-            "error": "RESET_ERROR",
-            "user": None
-        }
+        return {"error": str(e)}
 
 
 async def get_user_profile(user_id: str) -> Optional[UserResponse]:
