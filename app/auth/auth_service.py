@@ -91,40 +91,45 @@ async def register_user(register_data: RegisterRequest) -> Dict[str, Any]:
 
 
 async def login_user(login_data: LoginRequest) -> Dict[str, Any]:
-    supabase = get_admin_supabase_client()
+    supabase = get_supabase_client()
     try:
-        # Step 1: Authenticate with Supabase
         auth_response = supabase.auth.sign_in_with_password({
-            'email': login_data.email,
-            'password': login_data.password
+            "email": login_data.email,
+            "password": login_data.password
         })
 
-        auth_result = handle_supabase_error(auth_response, default_error="Login failed")
-        if not auth_result["success"]:
-            return error_response("Invalid email or password", code="INVALID_CREDENTIALS")
+        result = handle_supabase_error(auth_response, default_error="Login failed")
+        if not result["success"]:
+            return result
 
-        # Step 2: Check if auth_response actually has a user
+        # 🔑 Critical check
         if not getattr(auth_response, "user", None):
-            return error_response("Invalid email or password", code="INVALID_CREDENTIALS")
+            return error_response(
+                "Invalid email or password",
+                code="INVALID_CREDENTIALS"
+            )
 
-        # Step 3: Ensure user exists in our DB
-        user_response = (
+        # Optional: also check registered_users table for consistency
+        user_result = (
             supabase.table("registered_users")
             .select("*")
-            .eq("id", auth_response.user.id)   # safer to use Supabase UUID instead of email
+            .eq("id", auth_response.user.id)
             .maybe_single()
             .execute()
         )
 
-        user_check = handle_supabase_error(user_response, default_error="You are not authorized to log in")
-        if not user_check["success"] or not user_response.data:
-            return error_response("You are not authorized to log in", code="UNAUTHORIZED")
+        if user_result.error:
+            return error_response("Failed to fetch user profile", code="DB_ERROR")
 
-        return success_response("Login successful", {"user": user_response.data})
+        return success_response("Login successful", {
+            "id": auth_response.user.id,
+            "email": auth_response.user.email,
+            "name": user_result.data.get("name") if user_result.data else None
+        })
 
     except Exception as e:
         logger.error(f"Login error: {str(e)}")
-        return error_response("Login failed. Please try again later.", code="LOGIN_ERROR")
+        return error_response(str(e), code="LOGIN_ERROR")
 
 async def reset_user_password(email: str) -> Dict[str, Any]:
     supabase = get_supabase_client()
