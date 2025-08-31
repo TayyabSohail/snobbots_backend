@@ -5,31 +5,26 @@ import logging
 from app.supabase import get_supabase_client, get_admin_supabase_client
 from app.core.config import settings
 from .models import RegisterRequest, LoginRequest, UserResponse
+from app.helpers.response_helper import success_response, error_response
+from app.helpers.supabase_helper import handle_supabase_error
 
 logger = logging.getLogger(__name__)
 
 
 async def ensure_user_in_database(user_data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Ensure user exists in the registered_users table.
-    
-    Args:
-        user_data: Dictionary containing user information
-        
-    Returns:
-        Dictionary with insertion status and user data
-    """
     supabase = get_admin_supabase_client()
-    
     try:
-        # Check if user already exists in registered_users
-        logger.info(f"Inserting user into whitelist: {user_data}")
-        response = supabase.table('registered_users') \
-            .select('id') \
-            .or_(f"id.eq.{user_data['id']},email.eq.{user_data['email']}") \
+        response = (
+            supabase.table('registered_users')
+            .select('id')
+            .or_(f"id.eq.{user_data['id']},email.eq.{user_data['email']}")
             .execute()
-        
-        # If user doesn't exist, insert them
+        )
+
+        db_check = handle_supabase_error(response, default_error="Failed to check user in database")
+        if not db_check["success"]:
+            return db_check
+
         if not response.data:
             user_to_insert = {
                 'id': user_data['id'],
@@ -37,126 +32,99 @@ async def ensure_user_in_database(user_data: Dict[str, Any]) -> Dict[str, Any]:
                 'name': user_data['name'],
                 'approved': user_data.get('approved', True)
             }
-            
-            insert_response = supabase.table('registered_users') \
-                .insert([user_to_insert]) \
-                .execute()
-            
-            if insert_response.data:
-                logger.info(f"User {user_data['email']} inserted into registered_users")
-                return {'inserted': True, 'user': insert_response.data[0]}
-            else:
-                logger.error(f"Failed to insert user {user_data['email']}")
-                raise Exception('Failed to add user to database')
-        
-        logger.info(f"User {user_data['email']} already exists in registered_users")
-        return {'inserted': False, 'user': response.data[0]}
-        
+
+            insert_response = supabase.table('registered_users').insert([user_to_insert]).execute()
+            insert_result = handle_supabase_error(insert_response, default_error="Failed to insert user")
+
+            if not insert_result["success"]:
+                return insert_result
+
+            return success_response(
+                "User inserted successfully",
+                {"user": insert_response.data[0], "inserted": True}
+            )
+
+        return success_response(
+            "User already exists",
+            {"user": response.data[0], "inserted": False}
+        )
+
     except Exception as e:
         logger.error(f"Error ensuring user in database: {str(e)}")
-        raise
+        return error_response(str(e), code="DB_ERROR")
 
 
 async def register_user(register_data: RegisterRequest) -> Dict[str, Any]:
-    """
-    Register a new user with Supabase Auth and add to registered_users table.
-    
-    Args:
-        register_data: User registration data
-        
-    Returns:
-        Dictionary with registration result
-    """
     supabase = get_supabase_client()
     try:
-        # Sign up user with Supabase Auth
         auth_response = supabase.auth.sign_up({
             'email': register_data.email,
             'password': register_data.password,
-            'options': {
-                'data': {'name': register_data.name},
-            }
+            'options': {'data': {'name': register_data.name}}
         })
 
-        # Handle error if user already exists
-        if hasattr(auth_response, 'error') and auth_response.error:
-            error_msg = auth_response.error.message.lower()
-            if ("already registered" in error_msg or "already exists" in error_msg or "duplicate" in error_msg or "user already" in error_msg):
-                logger.info(f"Duplicate registration attempt for {register_data.email}")
-                return {'error': 'User with this email already exists. Please log in or reset your password.'}
-            logger.error(f"Registration error for {register_data.email}: {error_msg}")
-            return {'error': error_msg}
+        auth_result = handle_supabase_error(auth_response, default_error="Signup failed")
+        if not auth_result["success"]:
+            error_msg = auth_result["error"]["message"].lower()
+            if any(word in error_msg for word in ["already registered", "already exists", "duplicate", "user already"]):
+                return error_response(
+                    "User with this email already exists. Please log in or reset your password.",
+                    code="USER_EXISTS"
+                )
+            return auth_result
 
-        if auth_response.user is None:
-            logger.error(f"Signup failed for {register_data.email}: Unknown error.")
-            return {'error': "Signup failed. Unknown error."}
+        if not getattr(auth_response, "user", None):
+            return error_response("Signup failed. Unknown error.", code="AUTH_UNKNOWN")
 
-        # Add user to registered_users table
-        try:
-            # Check if user already exists in registered_users
-            supabase_admin = get_admin_supabase_client()
-            existing_user_response = (
-                supabase_admin.table("registered_users")
-                .select("id")
-                .eq("email", register_data.email)
-                .execute()
+        supabase_admin = get_admin_supabase_client()
+        existing_user_response = (
+            supabase_admin.table("registered_users")
+            .select("id")
+            .eq("email", register_data.email)
+            .execute()
+        )
+
+        existing_check = handle_supabase_error(existing_user_response, default_error="Failed to check existing user")
+        if existing_check["success"] and existing_user_response.data:
+            return error_response(
+                "User with this email already exists. Please log in or reset your password.",
+                code="USER_EXISTS"
             )
 
-            if existing_user_response.data and len(existing_user_response.data) > 0:
-                logger.info(f"Duplicate registration attempt for {register_data.email} (already in registered_users)")
-                return {"error": "User with this email already exists. Please log in or reset your password."}
+        user_result = await ensure_user_in_database({
+            'id': auth_response.user.id,
+            'email': register_data.email,
+            'name': register_data.name,
+            'approved': True
+        })
 
-            user_result = await ensure_user_in_database({
-                'id': auth_response.user.id,
-                'email': register_data.email,
-                'name': register_data.name,
-                'approved': True
-            })
-            return {
-                'success': True,
-                'user': user_result['user']
-            }
-        except Exception as e:
-            logger.error("User created but failed to add to whitelist", exc_info=True)
-            return {'error': f"Whitelist insert failed: {str(e)}"}
+        if not user_result["success"]:
+            return user_result
+
+        return success_response("User registered successfully", user_result["data"])
 
     except Exception as e:
         error_msg = str(e).lower()
+        if any(x in error_msg for x in ["already registered", "already exists", "duplicate", "user already"]):
+            return error_response(
+                "User with this email already exists. Please log in or reset your password.",
+                code="USER_EXISTS"
+            )
+        return error_response(str(e), code="REGISTER_ERROR")
 
-        # ✅ Case 1: user already exists
-        if any(x in error_msg for x in [
-            "already registered", "already exists", "duplicate", "user already"
-        ]):
-            logger.info(f"Duplicate registration attempt for {register_data.email} (exception)")
-            return {"error": "User with this email already exists. Please log in or reset your password."}
-
-        # ✅ Case 2: any other unexpected error → log + return real message
-        logger.error(f"Unexpected registration error for {register_data.email}: {repr(e)}")
-        return {"error": str(e)}
 
 async def login_user(login_data: LoginRequest) -> Dict[str, Any]:
-    """
-    Login user with Supabase Auth and verify they're in registered_users.
-    
-    Args:
-        login_data: User login data
-        
-    Returns:
-        Dictionary with login result and user data
-    """
-    supabase = get_admin_supabase_client()  
-    
+    supabase = get_admin_supabase_client()
     try:
-        # Sign in with Supabase Auth
         auth_response = supabase.auth.sign_in_with_password({
             'email': login_data.email,
             'password': login_data.password
         })
-        
-        if hasattr(auth_response, 'error') and auth_response.error:
-            return {'error': auth_response.error.message}
-        
-        # Check if user exists in registered_users table and get their data
+
+        auth_result = handle_supabase_error(auth_response, default_error="Login failed")
+        if not auth_result["success"]:
+            return auth_result
+
         user_response = (
             supabase.table("registered_users")
             .select("*")
@@ -164,99 +132,73 @@ async def login_user(login_data: LoginRequest) -> Dict[str, Any]:
             .single()
             .execute()
         )
-        
-        if not user_response.data:
-            return {'error': 'You are not authorized to log in'}
-        
-        return {
-            'success': True,
-            'user': user_response.data
-        }
-    
+
+        user_check = handle_supabase_error(user_response, default_error="You are not authorized to log in")
+        if not user_check["success"] or not user_response.data:
+            return error_response("You are not authorized to log in", code="UNAUTHORIZED")
+
+        return success_response("Login successful", {"user": user_response.data})
+
     except Exception as e:
         logger.error(f"Login error: {str(e)}")
-        return {'error': str(e)}
+        return error_response(str(e), code="LOGIN_ERROR")
 
 
 async def reset_user_password(email: str) -> Dict[str, Any]:
-    """
-    Reset user password using Supabase Auth.
-    
-    Args:
-        email: User email address
-        
-    Returns:
-        Dictionary with reset result
-    """
     supabase = get_supabase_client()
-    
     try:
         response = supabase.auth.reset_password_for_email(
             email,
-            {
-                "redirect_to": f"{settings.frontend_url}/reset-password"
-            }
+            {"redirect_to": f"{settings.frontend_url}/reset-password"}
         )
-        
-        # Supabase client returns a `PostgrestResponse` or AuthResponse type
-        if hasattr(response, 'error') and response.error:
-            return {'error': response.error.message}
-        return {'success': True, 'message': 'Password reset email sent'}
-    
+
+        result = handle_supabase_error(response, default_error="Failed to send reset email")
+        if not result["success"]:
+            return result
+
+        return success_response("Password reset email sent")
+
     except Exception as e:
         logger.error(f"Password reset error: {str(e)}")
-        return {'error': str(e)}
-
+        return error_response(str(e), code="RESET_ERROR")
 
 
 async def get_user_profile(user_id: str) -> Optional[UserResponse]:
-    """
-    Get user profile from registered_users table.
-    
-    Args:
-        user_id: User ID
-        
-    Returns:
-        User profile data or None
-    """
     supabase = get_admin_supabase_client()
-    
     try:
-        response = supabase.table('registered_users') \
-            .select('*') \
-            .eq('id', user_id) \
-            .single() \
+        response = (
+            supabase.table('registered_users')
+            .select('*')
+            .eq('id', user_id)
+            .single()
             .execute()
-        
-        if response.data:
-            return UserResponse(**response.data)
-        
-        return None
-    
+        )
+
+        result = handle_supabase_error(response, default_error="User not found")
+        if not result["success"] or not response.data:
+            return None
+
+        return UserResponse(**response.data)
+
     except Exception as e:
         logger.error(f"Error fetching user profile: {str(e)}")
         return None
 
-async def update_user_password(access_token: str, refresh_token: str, new_password: str) -> Dict[str, Any]:
-    """
-    Update user's password using the Supabase session tokens.
-    """
-    supabase = get_supabase_client()
 
+async def update_user_password(access_token: str, refresh_token: str, new_password: str) -> Dict[str, Any]:
+    supabase = get_supabase_client()
     try:
-        # Set the authenticated session using both tokens
-        supabase.auth.set_session(
-            access_token=access_token,
-            refresh_token=refresh_token
+        response = supabase.auth.update_user(
+            {'password': new_password},
+            {'access_token': access_token, 'refresh_token': refresh_token}
         )
 
-        # Update the password
-        response = supabase.auth.update_user({"password": new_password})
+        result = handle_supabase_error(response, default_error="Failed to update password")
+        if not result["success"]:
+            return result
 
-        if getattr(response, "error", None):
-            return {"error": response.error.message}
-
-        return {"success": True, "message": "Password updated successfully"}
+        return success_response("Password updated successfully")
 
     except Exception as e:
-        return {"error": str(e)}
+        logger.error(f"Password update error: {str(e)}")
+        return error_response(str(e), code="PASSWORD_UPDATE_ERROR")
