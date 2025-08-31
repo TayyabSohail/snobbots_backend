@@ -78,7 +78,17 @@ async def register_user(register_data: RegisterRequest) -> Dict[str, Any]:
         if not user_result["success"]:
             return user_result
 
-        return success_response("User registered successfully", user_result["data"])
+        return {
+            "success": True,
+            "message": "User registered successfully",
+            "error": None,
+            "user": {
+                "id": auth_response.user.id,
+                "email": register_data.email,
+                "name": register_data.name
+            }
+        }
+
 
     except Exception as e:
         error_msg = str(e).lower()
@@ -100,16 +110,23 @@ async def login_user(login_data: LoginRequest) -> Dict[str, Any]:
 
         result = handle_supabase_error(auth_response, default_error="Login failed")
         if not result["success"]:
-            return result
+            return {
+                "success": False,
+                "message": result.get("message", "Login failed"),
+                "error": result.get("error", "Login failed"),
+                "user": None
+            }
 
-        # 🔑 Critical check
+        # 🔑 Check if user exists in auth response
         if not getattr(auth_response, "user", None):
-            return error_response(
-                "Invalid email or password",
-                code="INVALID_CREDENTIALS"
-            )
+            return {
+                "success": False,
+                "message": "Invalid email or password",
+                "error": "INVALID_CREDENTIALS",
+                "user": None
+            }
 
-        # Optional: also check registered_users table for consistency
+        # Fetch user profile from registered_users for consistency
         user_result = (
             supabase.table("registered_users")
             .select("*")
@@ -119,17 +136,33 @@ async def login_user(login_data: LoginRequest) -> Dict[str, Any]:
         )
 
         if user_result.error:
-            return error_response("Failed to fetch user profile", code="DB_ERROR")
+            return {
+                "success": False,
+                "message": "Failed to fetch user profile",
+                "error": "DB_ERROR",
+                "user": None
+            }
 
-        return success_response("Login successful", {
-            "id": auth_response.user.id,
-            "email": auth_response.user.email,
-            "name": user_result.data.get("name") if user_result.data else None
-        })
+        # ✅ Old API contract: return user at top-level
+        return {
+            "success": True,
+            "message": "Login successful",
+            "error": None,
+            "user": {
+                "id": auth_response.user.id,
+                "email": auth_response.user.email,
+                "name": user_result.data.get("name") if user_result.data else None
+            }
+        }
 
     except Exception as e:
         logger.error(f"Login error: {str(e)}")
-        return error_response(str(e), code="LOGIN_ERROR")
+        return {
+            "success": False,
+            "message": "Login error",
+            "error": str(e),
+            "user": None
+        }
 
 async def reset_user_password(email: str) -> Dict[str, Any]:
     supabase = get_supabase_client()
@@ -143,11 +176,21 @@ async def reset_user_password(email: str) -> Dict[str, Any]:
         if not result["success"]:
             return result
 
-        return success_response("Password reset email sent")
+        return {
+            "success": True,
+            "message": "Password reset email sent successfully",
+            "error": None,
+            "user": None
+        }
 
     except Exception as e:
         logger.error(f"Password reset error: {str(e)}")
-        return error_response(str(e), code="RESET_ERROR")
+        return {
+            "success": False,
+            "message": str(e),
+            "error": "RESET_ERROR",
+            "user": None
+        }
 
 
 async def get_user_profile(user_id: str) -> Optional[UserResponse]:
