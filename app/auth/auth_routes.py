@@ -164,15 +164,6 @@ async def reset_password(reset_data: ResetPasswordRequest):
             detail="Internal server error during password reset"
         )
 
-@auth_router.get(
-    "/health",
-    summary="Health check",
-    description="Check if the auth service is running"
-)
-async def health_check():
-    """Health check endpoint."""
-    return {"status": "healthy", "service": "auth"}
-
 # Google OAuth Authentication Routes
 @auth_router.get(
     "/login/google",
