@@ -136,7 +136,7 @@ async def login_user(login_data: LoginRequest) -> Dict[str, Any]:
         user_result = (
             supabase.table("registered_users")
             .select("*")
-            .eq("id", auth_response.user.id)
+            .eq("email", login_data.email)
             .maybe_single()
             .execute()
         )

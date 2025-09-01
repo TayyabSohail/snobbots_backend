@@ -141,22 +141,17 @@ async def reset_password(reset_data: ResetPasswordRequest):
     """Reset user password."""
     try:
         result = await reset_user_password(reset_data.email)
-        
-        if 'error' in result:
-            logger.warning(f"Password reset failed for {reset_data.email}: {result['error']}")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=result['error']
-            )
-        
-        logger.info(f"Password reset email sent to {reset_data.email}")
+
+        # Log internally if there’s an error, but always respond 200
+        if result.get('error'):
+            logger.warning(f"Password reset attempted for {reset_data.email}: {result['error']}")
+
+        # Always return success to the client
         return AuthResponse(
             success=True,
-            message="Password reset email sent successfully"
+            message="If an account with this email exists, a password reset email has been sent."
         )
-    
-    except HTTPException:
-        raise
+
     except Exception as e:
         logger.error(f"Unexpected error during password reset: {str(e)}")
         raise HTTPException(
