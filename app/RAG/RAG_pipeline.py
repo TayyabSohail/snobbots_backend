@@ -3,62 +3,65 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from dotenv import load_dotenv
 import os
 from openai import OpenAI
-from pinecone import Pinecone
-from pinecone import ServerlessSpec
+from pinecone import Pinecone, ServerlessSpec
 
-# Config
-INDEX_NAME = "snobbots-index"  # Pinecone index name
-PDF_FILE = "input_data/Technevity Inc. NDA 1.0.pdf"
 
-# Load API keys
-load_dotenv()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+def process_and_index_pdf(file_bytes: bytes, filename: str, user_id: str):
+    """Process a PDF (from memory), split text, embed, and upsert into Pinecone."""
 
-client = OpenAI(api_key=OPENAI_API_KEY)
-pc = Pinecone(api_key=PINECONE_API_KEY)
+    # Load API keys once
+    load_dotenv()
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+    PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 
-# Create Pinecone index (only if it doesn’t exist)
-if INDEX_NAME not in pc.list_indexes().names():
-    pc.create_index(
-        name=INDEX_NAME,
-        dimension=3072,
-        metric="cosine",
-        spec=ServerlessSpec(
-            cloud="aws", 
-            region="us-east-1"
+    client = OpenAI(api_key=OPENAI_API_KEY)
+    pc = Pinecone(api_key=PINECONE_API_KEY)
+
+    # Make index name unique per user (sanitize: lowercase, no spaces)
+    INDEX_NAME = f"snobbots-{user_id.lower().replace(' ', '_')}"
+    
+    # Ensure index exists
+    if INDEX_NAME not in pc.list_indexes().names():
+        pc.create_index(
+            name=INDEX_NAME,
+            dimension=3072,
+            metric="cosine",
+            spec=ServerlessSpec(cloud="aws", region="us-east-1")
         )
-    )
+    index = pc.Index(INDEX_NAME)
 
-index = pc.Index(INDEX_NAME)
+    # Extract text from PDF (in memory)
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    text = "".join(page.get_text() for page in doc)
 
-# Extract text from PDF
-def extract_text_from_pdf(pdf_path):
-    doc = fitz.open(pdf_path)
-    text = ""
-    for page in doc:
-        text += page.get_text()
-    return text
+    # Split text into chunks
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    chunks = text_splitter.split_text(text)
 
-# Split PDF into chunks
-text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-text = extract_text_from_pdf(PDF_FILE)
-chunks = text_splitter.split_text(text)
+    # Create embeddings & prepare vectors
+    vectors = []
+    for i, chunk in enumerate(chunks):
+        resp = client.embeddings.create(
+            model="text-embedding-3-large",
+            input=chunk
+        )
+        embedding = resp.data[0].embedding
+        vectors.append({
+            "id": f"{user_id}_{filename}_{i}",
+            "values": embedding,
+            "metadata": {
+                "chunk_text": chunk,
+                "source": filename,
+                "user_id": user_id
+            }
+        })
 
-# Create embeddings + upsert into Pinecone
-vectors = []
-for i, chunk in enumerate(chunks):
-    resp = client.embeddings.create(
-        model="text-embedding-3-large", 
-        input=chunk
-    )
-    embedding = resp.data[0].embedding
-    vectors.append({
-        "id": str(i),
-        "values": embedding,
-        "metadata": {"chunk_text": chunk}
-    })
+    # Upsert into Pinecone
+    index.upsert(vectors=vectors)
 
-index.upsert(vectors=vectors)
-
-print(f"Indexed {len(chunks)} chunks into Pinecone with OpenAI embeddings")
+    return {
+        "filename": filename,
+        "chunks_indexed": len(chunks),
+        "index_name": INDEX_NAME,
+        "user_id": user_id
+    }

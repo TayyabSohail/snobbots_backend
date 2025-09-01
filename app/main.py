@@ -23,7 +23,7 @@ from app.auth import auth_router
 from app.helpers.response_helper import error_response
 
 from fastapi import FastAPI, UploadFile, File, Query, Header, HTTPException
-
+from app.RAG.RAG_pipeline import process_and_index_pdf
 # ---------------------------
 # Logging Configuration
 # ---------------------------
@@ -184,17 +184,17 @@ async def ask(request: QueryRequest):
     return JSONResponse({"answer": full_text})
 
 @app.post("/docs")
-def docs(user_id: str | None = Header(None), file: UploadFile = File(...)):
+async def docs(user_id: str | None = Header(None), file: UploadFile = File(...)):
     if not user_id:
         raise HTTPException(status_code=400, detail="user_id header is required")
     
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only .pdf files are supported")
     
-    return{
-        "user_id": user_id,
-        "filename": file.filename
-    }
+    file_bytes = await file.read()
+    result = process_and_index_pdf(file_bytes, file.filename,user_id)
+
+    return {"user_id": user_id, **result}
 
 # Supabase Auth Router
 app.include_router(auth_router, prefix=settings.api_prefix)
