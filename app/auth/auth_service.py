@@ -7,6 +7,7 @@ from app.core.config import settings
 from .models import RegisterRequest, LoginRequest, UserResponse
 from app.helpers.response_helper import success_response, error_response
 from app.helpers.supabase_helper import handle_supabase_error
+from app.supabase.supabase_client import get_admin_supabase_client, get_supabase_client
 
 logger = logging.getLogger(__name__)
 
@@ -115,15 +116,16 @@ async def register_user(register_data: RegisterRequest) -> Dict[str, Any]:
         return error_response(str(e), code="REGISTER_ERROR")
 
 async def login_user(login_data: LoginRequest) -> Dict[str, Any]:
-    supabase = get_supabase_client()
+
     try:
-        # 🔑 Attempt login with Supabase Auth
+        # Step 1: Sign in with Supabase Auth using standard anon key
+        supabase = get_supabase_client()
         auth_response = supabase.auth.sign_in_with_password({
             "email": login_data.email,
             "password": login_data.password
         })
 
-        # Check if user is present (invalid credentials return no user)
+        # Invalid credentials
         if not getattr(auth_response, "user", None):
             return {
                 "success": False,
@@ -132,16 +134,17 @@ async def login_user(login_data: LoginRequest) -> Dict[str, Any]:
                 "user": None
             }
 
-        # Fetch user profile from registered_users table
+        # Step 2: Fetch user profile using service role key to bypass RLS
+        admin_supabase = get_admin_supabase_client()
         user_result = (
-            supabase.table("registered_users")
+            admin_supabase.table("registered_users")
             .select("*")
-            .eq("email", login_data.email)
+            .eq("id", auth_response.user.id)
             .maybe_single()
             .execute()
         )
 
-        if getattr(user_result, "error", None):
+        if getattr(user_result, "error", None) or not user_result.data:
             return {
                 "success": False,
                 "message": "Failed to fetch user profile",
@@ -149,7 +152,7 @@ async def login_user(login_data: LoginRequest) -> Dict[str, Any]:
                 "user": None
             }
 
-        # ✅ Return consistent response
+        # Step 3: Return consistent response
         return {
             "success": True,
             "message": "Login successful",
@@ -157,7 +160,7 @@ async def login_user(login_data: LoginRequest) -> Dict[str, Any]:
             "user": {
                 "id": auth_response.user.id,
                 "email": auth_response.user.email,
-                "name": user_result.data.get("name") if user_result.data else None
+                "name": user_result.data.get("name")
             }
         }
 
