@@ -117,21 +117,13 @@ async def register_user(register_data: RegisterRequest) -> Dict[str, Any]:
 async def login_user(login_data: LoginRequest) -> Dict[str, Any]:
     supabase = get_supabase_client()
     try:
+        # 🔑 Attempt login with Supabase Auth
         auth_response = supabase.auth.sign_in_with_password({
             "email": login_data.email,
             "password": login_data.password
         })
 
-        result = handle_supabase_error(auth_response, default_error="Login failed")
-        if not result["success"]:
-            return {
-                "success": False,
-                "message": result.get("message", "Login failed"),
-                "error": result.get("error", "Login failed"),
-                "user": None
-            }
-
-        # 🔑 Check if user exists in auth response
+        # Check if user is present (invalid credentials return no user)
         if not getattr(auth_response, "user", None):
             return {
                 "success": False,
@@ -140,7 +132,7 @@ async def login_user(login_data: LoginRequest) -> Dict[str, Any]:
                 "user": None
             }
 
-        # Fetch user profile from registered_users for consistency
+        # Fetch user profile from registered_users table
         user_result = (
             supabase.table("registered_users")
             .select("*")
@@ -149,7 +141,7 @@ async def login_user(login_data: LoginRequest) -> Dict[str, Any]:
             .execute()
         )
 
-        if user_result.error:
+        if getattr(user_result, "error", None):
             return {
                 "success": False,
                 "message": "Failed to fetch user profile",
@@ -157,7 +149,7 @@ async def login_user(login_data: LoginRequest) -> Dict[str, Any]:
                 "user": None
             }
 
-        # ✅ Old API contract: return user at top-level
+        # ✅ Return consistent response
         return {
             "success": True,
             "message": "Login successful",
