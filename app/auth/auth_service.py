@@ -159,17 +159,22 @@ async def login_user(login_data: LoginRequest) -> Dict[str, Any]:
             }
 
         # Step 4: Success response
+        db_user = user_result.data
+        user_dict = {
+            "id": user_id,
+            "email": auth_response.user.email,
+            "name": db_user.get("name"),
+            "approved": db_user.get("approved", True),  # ✅ fill required field
+            "created_at": db_user.get("created_at"),    # optional
+            "access_token": getattr(auth_response.session, "access_token", None),
+            "refresh_token": getattr(auth_response.session, "refresh_token", None)
+        }
+
         return {
             "success": True,
             "message": "Login successful",
             "error": None,
-            "user": {
-                "id": user_id,
-                "email": auth_response.user.email,
-                "name": user_result.data.get("name"),
-                "access_token": auth_response.session.access_token,
-                "refresh_token": auth_response.session.refresh_token
-            }
+            "user": user_dict
         }
 
     except Exception as e:
