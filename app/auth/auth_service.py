@@ -66,7 +66,7 @@ async def register_user(register_data: RegisterRequest) -> Dict[str, Any]:
         })
 
         auth_result = handle_supabase_error(auth_response, default_error="Signup failed")
-        if not auth_result["success"] or not getattr(auth_response, "user", None):
+        if not auth_result["success"] or not auth_response.user:
             return error_response(
                 "Signup failed. Please try again.",
                 code="AUTH_SIGNUP_FAILED"
@@ -130,7 +130,7 @@ async def login_user(login_data: LoginRequest) -> Dict[str, Any]:
         # print("Auth response:", auth_response)
 
         # Step 2: Check if login worked
-        if not auth_response or not getattr(auth_response, "user", None):
+        if not auth_response or not auth_response.user:
             return {
                 "success": False,
                 "message": "Invalid email or password",
@@ -251,7 +251,7 @@ async def update_user_password(access_token: str, refresh_token: str, new_passwo
         response = supabase.auth.update_user({"password": new_password})
 
         result = handle_supabase_error(response, default_error="Failed to update password")
-        if not result["success"] or not getattr(response, "user", None):
+        if not result["success"] or not response.user:
             return error_response("Failed to update password", code="PASSWORD_UPDATE_FAILED")
 
         return success_response("Password updated successfully")
