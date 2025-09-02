@@ -115,18 +115,22 @@ async def register_user(register_data: RegisterRequest) -> Dict[str, Any]:
             )
         return error_response(str(e), code="REGISTER_ERROR")
 
+# ---------- services/auth_service.py ----------
 async def login_user(login_data: LoginRequest) -> Dict[str, Any]:
-
     try:
-        # Step 1: Sign in with Supabase Auth using standard anon key
         supabase = get_supabase_client()
+
+        # Step 1: Authenticate with Supabase Auth
         auth_response = supabase.auth.sign_in_with_password({
             "email": login_data.email,
             "password": login_data.password
         })
 
-        # Invalid credentials
-        if not getattr(auth_response, "user", None):
+        # Debugging (optional):
+        # print("Auth response:", auth_response)
+
+        # Step 2: Check if login worked
+        if not auth_response or not getattr(auth_response, "user", None):
             return {
                 "success": False,
                 "message": "Invalid email or password",
@@ -134,12 +138,14 @@ async def login_user(login_data: LoginRequest) -> Dict[str, Any]:
                 "user": None
             }
 
-        # Step 2: Fetch user profile using service role key to bypass RLS
+        user_id = auth_response.user.id
+
+        # Step 3: Fetch user profile with admin client (bypass RLS)
         admin_supabase = get_admin_supabase_client()
         user_result = (
             admin_supabase.table("registered_users")
             .select("*")
-            .eq("id", auth_response.user.id)
+            .eq("id", user_id)
             .maybe_single()
             .execute()
         )
@@ -152,15 +158,17 @@ async def login_user(login_data: LoginRequest) -> Dict[str, Any]:
                 "user": None
             }
 
-        # Step 3: Return consistent response
+        # Step 4: Success response
         return {
             "success": True,
             "message": "Login successful",
             "error": None,
             "user": {
-                "id": auth_response.user.id,
+                "id": user_id,
                 "email": auth_response.user.email,
-                "name": user_result.data.get("name")
+                "name": user_result.data.get("name"),
+                "access_token": auth_response.session.access_token,
+                "refresh_token": auth_response.session.refresh_token
             }
         }
 
@@ -210,13 +218,37 @@ async def get_user_profile(user_id: str) -> Optional[UserResponse]:
         return None
 
 
+# async def update_user_password(access_token: str, refresh_token: str, new_password: str) -> Dict[str, Any]:
+#     supabase = get_supabase_client()
+#     try:
+#         response = supabase.auth.update_user(
+#             {'password': new_password},
+#             {'access_token': access_token, 'refresh_token': refresh_token}
+#         )
+
+#         result = handle_supabase_error(response, default_error="Failed to update password")
+#         if not result["success"] or not getattr(response, "user", None):
+#             return error_response("Failed to update password", code="PASSWORD_UPDATE_FAILED")
+
+#         return success_response("Password updated successfully")
+
+#     except Exception as e:
+#         logger.error(f"Password update error: {str(e)}")
+#         return error_response(str(e), code="PASSWORD_UPDATE_ERROR")
+
 async def update_user_password(access_token: str, refresh_token: str, new_password: str) -> Dict[str, Any]:
     supabase = get_supabase_client()
     try:
-        response = supabase.auth.update_user(
-            {'password': new_password},
-            {'access_token': access_token, 'refresh_token': refresh_token}
+        # 1. Set the session using tokens from reset email
+        session = supabase.auth.set_session(
+            access_token=access_token,
+            refresh_token=refresh_token
         )
+        if not session or not session.user:
+            return error_response("Invalid or expired tokens", code="INVALID_SESSION")
+
+        # 2. Update the password for that session’s user
+        response = supabase.auth.update_user({"password": new_password})
 
         result = handle_supabase_error(response, default_error="Failed to update password")
         if not result["success"] or not getattr(response, "user", None):

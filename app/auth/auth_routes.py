@@ -96,6 +96,7 @@ async def update_password(data: UpdatePasswordRequest):
         message="Password updated successfully"
     )
 
+# ---------- routes/auth.py ----------
 @auth_router.post(
     "/login",
     response_model=AuthResponse,
@@ -103,33 +104,24 @@ async def update_password(data: UpdatePasswordRequest):
     description="Login user with email and password"
 )
 async def login(user_data: LoginRequest):
-    """Login a user."""
-    try:
-        result = await login_user(user_data)
-        
-        if 'error' in result:
-            logger.warning(f"Login failed for {user_data.email}: {result['error']}")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=result['error']
-            )
-        
-        logger.info(f"User {user_data.email} logged in successfully")
-        return AuthResponse(
-            success=True,
-            message="Login successful",
-            user=result.get('user')
-        )
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Unexpected error during login: {str(e)}")
+    """Login a user with Supabase Auth."""
+    result = await login_user(user_data)
+
+    # ✅ Only raise if actual error string present
+    if result.get("error"):
+        logger.warning(f"Login failed for {user_data.email}: {result['error']}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error during login"
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=result["error"]
         )
 
+    logger.info(f"User {user_data.email} logged in successfully")
+
+    return AuthResponse(
+        success=True,
+        message="Login successful",
+        user=result["user"]
+    )
 
 @auth_router.post(
     "/reset-password",
