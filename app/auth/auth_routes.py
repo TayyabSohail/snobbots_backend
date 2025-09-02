@@ -141,7 +141,7 @@ async def reset_password(reset_data: ResetPasswordRequest):
         # Always return success to the client
         return AuthResponse(
             success=True,
-            message="If an account with this email exists, a password reset email has been sent."
+            message="A password reset link has been sent to your email."
         )
 
     except Exception as e:
