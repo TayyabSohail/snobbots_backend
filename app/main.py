@@ -10,7 +10,7 @@ import numpy as np
 import uvicorn
 from dotenv import load_dotenv
 from openai import OpenAI
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
@@ -24,6 +24,8 @@ from app.helpers.response_helper import error_response
 
 from fastapi import FastAPI, UploadFile, File, Query, Header, HTTPException
 from app.RAG.RAG_pipeline import process_and_index_pdf
+
+from app.supabase import get_supabase_client
 # ---------------------------
 # Logging Configuration
 # ---------------------------
@@ -183,18 +185,40 @@ async def ask(request: QueryRequest):
     full_text = "".join([chunk for chunk in generate_response(request.query)])
     return JSONResponse({"answer": full_text})
 
+def get_current_user(authorization: str = Header(...)):
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid auth header")
+
+    token = authorization.split(" ")[1]
+    supabase = get_supabase_client()
+
+    # Call Supabase auth API directly
+    resp = requests.get(
+        f"{supabase.supabase_url}/auth/v1/user",
+        headers={"Authorization": f"Bearer {token}", "apikey": supabase.supabase_key}
+    )
+
+    if resp.status_code != 200:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    return resp.json()  # contains user_id, email, etc.
+
+
 @app.post("/docs")
-async def docs(user_id: str | None = Header(None), file: UploadFile = File(...)):
-    if not user_id:
-        raise HTTPException(status_code=400, detail="user_id header is required")
-    
+def docs(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user)
+):
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only .pdf files are supported")
     
-    file_bytes = await file.read()
-    result = process_and_index_pdf(file_bytes, file.filename,user_id)
+    user_id = current_user["id"]
 
-    return {"user_id": user_id, **result}
+    file_bytes = file.file.read()
+    result = process_and_index_pdf(file_bytes, file.filename, user_id)
+
+    return result
+
 
 # Supabase Auth Router
 app.include_router(auth_router, prefix=settings.api_prefix)
