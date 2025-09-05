@@ -25,3 +25,4 @@ pinecone
 openai
 python-multipart
 python-docx
+bs4
