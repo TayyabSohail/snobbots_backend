@@ -11,7 +11,7 @@ from fastapi import Depends
 from typing import Optional
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
-
+import json
 
 rag_router = APIRouter(prefix="/rag", tags=["RAG"])
 
@@ -31,49 +31,51 @@ async def ask(
 
 
 
+class QAPair(BaseModel):
+    question: str
+    answer: str
+
 @rag_router.post("/docs")
 def docs(
-    file: Optional[UploadFile] = File(None),              # optional file upload
-    raw_text: Optional[str] = Form(None),                 # optional plain text
-    qa_json: Optional[str] = Form(None),                  # optional QA JSON
+    file: Optional[UploadFile] = File(None),
+    raw_text: Optional[str] = Form(None),
+    qa_json: Optional[str] = Form(None),
     current_user: dict = Depends(get_current_user)
 ):
+    """
+    Accepts either:
+    - File upload (.pdf, .docx, .txt)
+    - Raw text (string)
+    - QA JSON (stringified JSON)
+    """
     user_id = current_user["id"]
 
-    # Case 1: File upload (.pdf, .docx, .txt)
     if file:
-        if not (file.filename.lower().endswith(".pdf") or
-                file.filename.lower().endswith(".docx") or
-                file.filename.lower().endswith(".txt")):
-            raise HTTPException(status_code=400, detail="Only .pdf, .docx, or .txt files are supported")
-
+        # --- File mode ---
+        filename = file.filename.lower()
+        if not (filename.endswith(".pdf") or filename.endswith(".docx") or filename.endswith(".txt")):
+            raise HTTPException(status_code=400, detail="Only .pdf, .docx, .txt supported")
         file_bytes = file.file.read()
-        result = process_and_index_data(
-            user_id=user_id,
-            filename=file.filename,
-            file_bytes=file_bytes
-        )
-        return result
+        result = process_and_index_data(user_id=user_id, filename=filename, file_bytes=file_bytes)
+        return {"mode": "file", "result": result}
 
-    # Case 2: Raw text
-    if raw_text:
-        result = process_and_index_data(
-            user_id=user_id,
-            raw_text=raw_text
-        )
-        return result
+    elif raw_text:
+        # --- Raw text mode ---
+        result = process_and_index_data(user_id=user_id, raw_text=raw_text)
+        return {"mode": "raw_text", "result": result}
 
-    # Case 3: QA JSON
-    if qa_json:
-        result = process_and_index_data(
-            user_id=user_id,
-            qa_json=qa_json
-        )
-        return result
+    elif qa_json:
+        # --- QA JSON mode ---
+        try:
+            qa_data = json.loads(qa_json)  # ensure it's parsed
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid JSON format for qa_json")
+        result = process_and_index_data(user_id=user_id, qa_json=qa_data)
+        return {"mode": "qa_json", "result": result}
 
-    # If none provided
-    raise HTTPException(status_code=400, detail="You must provide either a file, raw_text, or qa_json")
-
+    else:
+        raise HTTPException(status_code=400, detail="Provide a file, raw_text, or qa_json")
+    
 @rag_router.get("/crawl/discover")
 def discover_links(
     url: str = Query(..., description="Base website URL"),
