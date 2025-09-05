@@ -15,8 +15,13 @@ class QueryRequest(BaseModel):
 
 
 @rag_router.post("/ask")
-async def ask(request: QueryRequest):
-    full_text = "".join([chunk for chunk in generate_response(request.query)])
+async def ask(
+    request: QueryRequest,
+    current_user:dict = Depends(get_current_user)
+    ):
+    
+    user_id = current_user["id"]
+    full_text = "".join([chunk for chunk in generate_response(request.query,user_id)])
     return JSONResponse({"answer": full_text})
 
 
