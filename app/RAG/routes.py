@@ -35,6 +35,7 @@ class QAPair(BaseModel):
     question: str
     answer: str
 
+
 @rag_router.post("/docs")
 def docs(
     file: Optional[UploadFile] = File(None),
@@ -43,39 +44,35 @@ def docs(
     current_user: dict = Depends(get_current_user)
 ):
     """
-    Accepts either:
-    - File upload (.pdf, .docx, .txt)
-    - Raw text (string)
-    - QA JSON (stringified JSON)
+    Unified endpoint: accepts either a file (.pdf/.docx/.txt),
+    raw text, or QA JSON (question-answer pairs).
     """
     user_id = current_user["id"]
 
+    # Case 1: File Upload
     if file:
-        # --- File mode ---
-        filename = file.filename.lower()
-        if not (filename.endswith(".pdf") or filename.endswith(".docx") or filename.endswith(".txt")):
-            raise HTTPException(status_code=400, detail="Only .pdf, .docx, .txt supported")
+        if not file.filename.lower().endswith((".pdf", ".docx", ".txt")):
+            raise HTTPException(status_code=400, detail="Only .pdf, .docx, and .txt files are supported")
         file_bytes = file.file.read()
-        result = process_and_index_data(user_id=user_id, filename=filename, file_bytes=file_bytes)
-        return {"mode": "file", "result": result}
+        return process_and_index_data(user_id=user_id, filename=file.filename, file_bytes=file_bytes)
 
-    elif raw_text:
-        # --- Raw text mode ---
-        result = process_and_index_data(user_id=user_id, raw_text=raw_text)
-        return {"mode": "raw_text", "result": result}
+    # Case 2: Raw Text
+    if raw_text:
+        return process_and_index_data(user_id=user_id, raw_text=raw_text)
 
-    elif qa_json:
-        # --- QA JSON mode ---
+    # Case 3: QA JSON
+    if qa_json:
         try:
-            qa_data = json.loads(qa_json)  # ensure it's parsed
-        except json.JSONDecodeError:
-            raise HTTPException(status_code=400, detail="Invalid JSON format for qa_json")
-        result = process_and_index_data(user_id=user_id, qa_json=qa_data)
-        return {"mode": "qa_json", "result": result}
+            qa_data = json.loads(qa_json)  # must be a string, not list directly
+            if not isinstance(qa_data, list):
+                raise ValueError("qa_json must be a list of objects")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid qa_json format: {e}")
+        return process_and_index_data(user_id=user_id, qa_json=qa_data)
 
-    else:
-        raise HTTPException(status_code=400, detail="Provide a file, raw_text, or qa_json")
-    
+    raise HTTPException(status_code=400, detail="No valid input provided")
+
+
 @rag_router.get("/crawl/discover")
 def discover_links(
     url: str = Query(..., description="Base website URL"),

@@ -21,7 +21,7 @@ def process_and_index_data(
     filename: str = None,
     file_bytes: bytes = None,
     raw_text: str = None,
-    qa_json: str = None
+    qa_json: str | list = None
 ):
     """
     Process data (PDF, DOCX, TXT, raw text, or QA JSON), chunk, embed, and upsert into Pinecone.
@@ -31,7 +31,7 @@ def process_and_index_data(
         filename: Optional filename for file (PDF, DOCX, TXT)
         file_bytes: File bytes
         raw_text: Raw text input
-        qa_json: JSON string with [{"question": "...", "answer": "..."}]
+        qa_json: JSON string OR list with [{"question": "...", "answer": "..."}]
     """
 
     # Unique index name per user
@@ -78,15 +78,26 @@ def process_and_index_data(
 
     # Case 3: QA JSON
     if qa_json:
-        try:
-            qa_pairs = json.loads(qa_json)
-            for i, qa in enumerate(qa_pairs):
-                q = qa.get("question", "").strip()
-                a = qa.get("answer", "").strip()
-                if q and a:
-                    chunks.append(f"Q: {q}\nA: {a}")
-        except Exception as e:
-            raise ValueError(f"Invalid QA JSON format: {e}")
+        # Normalize qa_json -> list
+        if isinstance(qa_json, str):
+            try:
+                qa_pairs = json.loads(qa_json)
+            except Exception as e:
+                raise ValueError(f"Invalid QA JSON string format: {e}")
+        elif isinstance(qa_json, list):
+            qa_pairs = qa_json
+        else:
+            raise ValueError("qa_json must be a JSON string or a list")
+
+        # Validate and build chunks
+        if not all(isinstance(item, dict) and "question" in item and "answer" in item for item in qa_pairs):
+            raise ValueError("qa_json must be a list of {question, answer} objects")
+
+        for i, qa in enumerate(qa_pairs):
+            q = qa.get("question", "").strip()
+            a = qa.get("answer", "").strip()
+            if q and a:
+                chunks.append(f"Q: {q}\nA: {a}")
 
     # Safety check
     if not chunks:
