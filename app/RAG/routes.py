@@ -108,7 +108,7 @@ def fetch_and_index(
     endpoint: str = Query(..., description="Specific endpoint path (e.g., /faq)"),
     current_user: dict = Depends(get_current_user)
 ):
-    """Fetch a specific endpoint and index its content into RAG pipeline."""
+    """Fetch a specific endpoint and index its content into RAG pipeline with heading + body grouping."""
     user_id = current_user["id"]
     full_url = urljoin(base_url, endpoint)
 
@@ -119,29 +119,63 @@ def fetch_and_index(
         raise HTTPException(status_code=400, detail=f"Failed to fetch {full_url}: {str(e)}")
 
     soup = BeautifulSoup(response.text, "html.parser")
-    # Extract visible text only
-    text = " ".join(
-        [
-            t.get_text(" ", strip=True)
-            for t in soup.find_all(["p", "li", "h1", "h2", "h3", "h4"])
-            if t.get_text(strip=True)
-        ]
-    )
 
-    if not text:
-        raise HTTPException(status_code=400, detail=f"No text found on {full_url}")
+    # Collect structured blocks
+    grouped_chunks = []
+    current_heading = None
+    current_block = []
 
-    # ✅ Pass explicit "web_crawling" source
-    result = process_and_index_data(
-        user_id=user_id,
-        raw_text=text,
-        filename=endpoint.strip("/"),
-        source="web_crawling"
-    )
+    for el in soup.find_all(["h1", "h2", "h3", "h4", "p", "li"]):
+        text = el.get_text(" ", strip=True)
+        if not text:
+            continue
+
+        if el.name in ["h1", "h2", "h3", "h4"]:
+            # If we already had a heading + its block, save it
+            if current_heading or current_block:
+                grouped_chunks.append({
+                    "heading": current_heading,
+                    "content": " ".join(current_block).strip()
+                })
+                current_block = []
+
+            # Start new heading
+            current_heading = text
+
+        else:  # paragraph or list item
+            current_block.append(text)
+
+    # Don’t forget the last block
+    if current_heading or current_block:
+        grouped_chunks.append({
+            "heading": current_heading,
+            "content": " ".join(current_block).strip()
+        })
+
+    if not grouped_chunks:
+        raise HTTPException(status_code=400, detail=f"No meaningful structured text found on {full_url}")
+
+    # ✅ Process and index each heading+content pair
+    results = []
+    for block in grouped_chunks:
+        combined_text = f"{block['heading']}\n{block['content']}" if block["heading"] else block["content"]
+
+        result = process_and_index_data(
+            user_id=user_id,
+            raw_text=combined_text,
+            filename=endpoint.strip("/"),
+            source_type="web_crawling"  # requires updated process_and_index_data with source_type
+        )
+
+        results.append({
+            "heading": block["heading"],
+            "preview": combined_text[:120],  # small preview
+            "chunks_indexed": result["chunks_indexed"]
+        })
 
     return {
         "base_url": base_url,
         "endpoint": endpoint,
-        "indexed_chars": len(text),
-        "result": result
+        "blocks_extracted": len(grouped_chunks),
+        "indexed_blocks": results
     }
