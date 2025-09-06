@@ -44,34 +44,44 @@ def docs(
     current_user: dict = Depends(get_current_user)
 ):
     """
-    Unified endpoint: accepts either a file (.pdf/.docx/.txt),
-    raw text, or QA JSON (question-answer pairs).
+    Unified endpoint: accepts file (.pdf/.docx/.txt),
+    raw text, and/or QA JSON (question-answer pairs).
+    Can handle multiple inputs at once.
     """
     user_id = current_user["id"]
+
+    file_bytes = None
+    filename = None
+    qa_data = None
 
     # Case 1: File Upload
     if file:
         if not file.filename.lower().endswith((".pdf", ".docx", ".txt")):
             raise HTTPException(status_code=400, detail="Only .pdf, .docx, and .txt files are supported")
         file_bytes = file.file.read()
-        return process_and_index_data(user_id=user_id, filename=file.filename, file_bytes=file_bytes)
+        filename = file.filename
 
-    # Case 2: Raw Text
-    if raw_text:
-        return process_and_index_data(user_id=user_id, raw_text=raw_text)
-
-    # Case 3: QA JSON
+    # Case 2: QA JSON
     if qa_json:
         try:
-            qa_data = json.loads(qa_json)  # must be a string, not list directly
+            qa_data = json.loads(qa_json)
             if not isinstance(qa_data, list):
                 raise ValueError("qa_json must be a list of objects")
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Invalid qa_json format: {e}")
-        return process_and_index_data(user_id=user_id, qa_json=qa_data)
 
-    raise HTTPException(status_code=400, detail="No valid input provided")
+    # If nothing provided
+    if not (file_bytes or raw_text or qa_data):
+        raise HTTPException(status_code=400, detail="No valid input provided")
 
+    # Pass all collected inputs
+    return process_and_index_data(
+        user_id=user_id,
+        filename=filename,
+        file_bytes=file_bytes,
+        raw_text=raw_text,
+        qa_json=qa_data
+    )
 
 @rag_router.get("/crawl/discover")
 def discover_links(
@@ -79,9 +89,18 @@ def discover_links(
     current_user: dict = Depends(get_current_user)
 ):
     """Discover all internal endpoints from the given website."""
-    endpoints = get_internal_links(url)
-    return {"base_url": url, "endpoints": endpoints}
 
+    # Explicitly validate user
+    if not current_user or "id" not in current_user:
+        raise HTTPException(status_code=401, detail="Invalid or unauthorized user")
+
+    endpoints = get_internal_links(url)
+
+    return {
+        "base_url": url,
+        "endpoints": endpoints,
+        "user_id": current_user["id"]
+    }
 
 @rag_router.post("/crawl/fetch")
 def fetch_and_index(

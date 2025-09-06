@@ -6,6 +6,7 @@ import os
 from openai import OpenAI
 from pinecone import Pinecone, ServerlessSpec
 import json
+import uuid
 
 # Load keys
 load_dotenv()
@@ -47,7 +48,7 @@ def process_and_index_data(
         )
     index = pc.Index(INDEX_NAME)
 
-    # Collect text chunks
+    # Collect chunks with source info
     chunks = []
 
     # Case 1: File upload
@@ -69,12 +70,14 @@ def process_and_index_data(
             raise ValueError(f"Unsupported file type: {ext}")
 
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-        chunks.extend(text_splitter.split_text(text))
+        file_chunks = text_splitter.split_text(text)
+        chunks.extend({"text": c, "source": filename} for c in file_chunks)
 
     # Case 2: Raw text
     if raw_text:
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-        chunks.extend(text_splitter.split_text(raw_text))
+        text_chunks = text_splitter.split_text(raw_text)
+        chunks.extend({"text": c, "source": "raw_text"} for c in text_chunks)
 
     # Case 3: QA JSON
     if qa_json:
@@ -93,30 +96,33 @@ def process_and_index_data(
         if not all(isinstance(item, dict) and "question" in item and "answer" in item for item in qa_pairs):
             raise ValueError("qa_json must be a list of {question, answer} objects")
 
-        for i, qa in enumerate(qa_pairs):
+        for qa in qa_pairs:
             q = qa.get("question", "").strip()
             a = qa.get("answer", "").strip()
             if q and a:
-                chunks.append(f"Q: {q}\nA: {a}")
+                chunks.append({"text": f"Q: {q}\nA: {a}", "source": "qa_json"})
 
     # Safety check
     if not chunks:
         raise ValueError("No valid input provided (PDF/DOCX/TXT, raw_text, or qa_json required).")
 
-    # Embed + upsert
+    # Embed + upsert (append-only IDs)
     vectors = []
     for i, chunk in enumerate(chunks):
         resp = client.embeddings.create(
             model="text-embedding-3-large",
-            input=chunk
+            input=chunk["text"]
         )
         embedding = resp.data[0].embedding
+
+        unique_id = f"{user_id}_{chunk['source']}_{i}_{uuid.uuid4().hex[:8]}"
+
         vectors.append({
-            "id": f"{user_id}_{filename or 'custom'}_{i}",
+            "id": unique_id,
             "values": embedding,
             "metadata": {
-                "chunk_text": chunk,
-                "source": filename or "custom",
+                "chunk_text": chunk["text"],
+                "source": chunk["source"],
                 "user_id": user_id
             }
         })
