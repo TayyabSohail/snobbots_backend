@@ -14,6 +14,12 @@ def generate_response(query: str, user_id: str):
 
     # Build index name per user
     index_name = f"snobbots-{user_id.lower().replace(' ', '_')}"
+
+    # ✅ Check if index exists
+    if index_name not in pc.list_indexes().names():
+        yield f"⚠️ No knowledge base found for user `{user_id}`. Please upload documents first."
+        return
+
     index = pc.Index(index_name)
 
     # Embedding for query

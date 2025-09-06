@@ -11,7 +11,7 @@ from fastapi import Depends
 from typing import Optional
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
-
+import json
 
 rag_router = APIRouter(prefix="/rag", tags=["RAG"])
 
@@ -31,48 +31,57 @@ async def ask(
 
 
 
+class QAPair(BaseModel):
+    question: str
+    answer: str
+
+
 @rag_router.post("/docs")
 def docs(
-    file: Optional[UploadFile] = File(None),              # optional file upload
-    raw_text: Optional[str] = Form(None),                 # optional plain text
-    qa_json: Optional[str] = Form(None),                  # optional QA JSON
+    file: Optional[UploadFile] = File(None),
+    raw_text: Optional[str] = Form(None),
+    qa_json: Optional[str] = Form(None),
     current_user: dict = Depends(get_current_user)
 ):
+    """
+    Unified endpoint: accepts file (.pdf/.docx/.txt),
+    raw text, and/or QA JSON (question-answer pairs).
+    Can handle multiple inputs at once.
+    """
     user_id = current_user["id"]
 
-    # Case 1: File upload (.pdf, .docx, .txt)
+    file_bytes = None
+    filename = None
+    qa_data = None
+
+    # Case 1: File Upload
     if file:
-        if not (file.filename.lower().endswith(".pdf") or
-                file.filename.lower().endswith(".docx") or
-                file.filename.lower().endswith(".txt")):
-            raise HTTPException(status_code=400, detail="Only .pdf, .docx, or .txt files are supported")
-
+        if not file.filename.lower().endswith((".pdf", ".docx", ".txt")):
+            raise HTTPException(status_code=400, detail="Only .pdf, .docx, and .txt files are supported")
         file_bytes = file.file.read()
-        result = process_and_index_data(
-            user_id=user_id,
-            filename=file.filename,
-            file_bytes=file_bytes
-        )
-        return result
+        filename = file.filename
 
-    # Case 2: Raw text
-    if raw_text:
-        result = process_and_index_data(
-            user_id=user_id,
-            raw_text=raw_text
-        )
-        return result
-
-    # Case 3: QA JSON
+    # Case 2: QA JSON
     if qa_json:
-        result = process_and_index_data(
-            user_id=user_id,
-            qa_json=qa_json
-        )
-        return result
+        try:
+            qa_data = json.loads(qa_json)
+            if not isinstance(qa_data, list):
+                raise ValueError("qa_json must be a list of objects")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid qa_json format: {e}")
 
-    # If none provided
-    raise HTTPException(status_code=400, detail="You must provide either a file, raw_text, or qa_json")
+    # If nothing provided
+    if not (file_bytes or raw_text or qa_data):
+        raise HTTPException(status_code=400, detail="No valid input provided")
+
+    # Pass all collected inputs
+    return process_and_index_data(
+        user_id=user_id,
+        filename=filename,
+        file_bytes=file_bytes,
+        raw_text=raw_text,
+        qa_json=qa_data
+    )
 
 @rag_router.get("/crawl/discover")
 def discover_links(
@@ -80,9 +89,18 @@ def discover_links(
     current_user: dict = Depends(get_current_user)
 ):
     """Discover all internal endpoints from the given website."""
-    endpoints = get_internal_links(url)
-    return {"base_url": url, "endpoints": endpoints}
 
+    # Explicitly validate user
+    if not current_user or "id" not in current_user:
+        raise HTTPException(status_code=401, detail="Invalid or unauthorized user")
+
+    endpoints = get_internal_links(url)
+
+    return {
+        "base_url": url,
+        "endpoints": endpoints,
+        "user_id": current_user["id"]
+    }
 
 @rag_router.post("/crawl/fetch")
 def fetch_and_index(
@@ -90,7 +108,7 @@ def fetch_and_index(
     endpoint: str = Query(..., description="Specific endpoint path (e.g., /faq)"),
     current_user: dict = Depends(get_current_user)
 ):
-    """Fetch a specific endpoint and index its content into RAG pipeline."""
+    """Fetch a specific endpoint and index its content into RAG pipeline with heading + body grouping."""
     user_id = current_user["id"]
     full_url = urljoin(base_url, endpoint)
 
@@ -101,21 +119,63 @@ def fetch_and_index(
         raise HTTPException(status_code=400, detail=f"Failed to fetch {full_url}: {str(e)}")
 
     soup = BeautifulSoup(response.text, "html.parser")
-    # Extract visible text only
-    text = " ".join([t.get_text(" ", strip=True) for t in soup.find_all(["p", "li", "h1", "h2", "h3", "h4"]) if t.get_text(strip=True)])
 
-    if not text:
-        raise HTTPException(status_code=400, detail=f"No text found on {full_url}")
+    # Collect structured blocks
+    grouped_chunks = []
+    current_heading = None
+    current_block = []
 
-    result = process_and_index_data(
-        user_id=user_id,
-        raw_text=text,
-        filename=endpoint.strip("/")
-    )
+    for el in soup.find_all(["h1", "h2", "h3", "h4", "p", "li"]):
+        text = el.get_text(" ", strip=True)
+        if not text:
+            continue
+
+        if el.name in ["h1", "h2", "h3", "h4"]:
+            # If we already had a heading + its block, save it
+            if current_heading or current_block:
+                grouped_chunks.append({
+                    "heading": current_heading,
+                    "content": " ".join(current_block).strip()
+                })
+                current_block = []
+
+            # Start new heading
+            current_heading = text
+
+        else:  # paragraph or list item
+            current_block.append(text)
+
+    # Don’t forget the last block
+    if current_heading or current_block:
+        grouped_chunks.append({
+            "heading": current_heading,
+            "content": " ".join(current_block).strip()
+        })
+
+    if not grouped_chunks:
+        raise HTTPException(status_code=400, detail=f"No meaningful structured text found on {full_url}")
+
+    # ✅ Process and index each heading+content pair
+    results = []
+    for block in grouped_chunks:
+        combined_text = f"{block['heading']}\n{block['content']}" if block["heading"] else block["content"]
+
+        result = process_and_index_data(
+            user_id=user_id,
+            raw_text=combined_text,
+            filename=endpoint.strip("/"),
+            source_type="web_crawling"  # requires updated process_and_index_data with source_type
+        )
+
+        results.append({
+            "heading": block["heading"],
+            "preview": combined_text[:120],  # small preview
+            "chunks_indexed": result["chunks_indexed"]
+        })
 
     return {
         "base_url": base_url,
         "endpoint": endpoint,
-        "indexed_chars": len(text),
-        "result": result
+        "blocks_extracted": len(grouped_chunks),
+        "indexed_blocks": results
     }
