@@ -22,13 +22,11 @@ class QueryRequest(BaseModel):
 @rag_router.post("/ask")
 async def ask(
     request: QueryRequest,
-    current_user:dict = Depends(get_current_user)
-    ):
-    
+    current_user: dict = Depends(get_current_user)
+):
     user_id = current_user["id"]
-    full_text = "".join([chunk for chunk in generate_response(request.query,user_id)])
+    full_text = "".join([chunk for chunk in generate_response(request.query, user_id)])
     return JSONResponse({"answer": full_text})
-
 
 
 class QAPair(BaseModel):
@@ -43,10 +41,8 @@ def docs(
     qa_json: Optional[str] = Form(None),
     current_user: dict = Depends(get_current_user)
 ):
-    """
-    Unified endpoint: accepts file (.pdf/.docx/.txt),
+    """Unified endpoint: accepts file (.pdf/.docx/.txt),
     raw text, and/or QA JSON (question-answer pairs).
-    Can handle multiple inputs at once.
     """
     user_id = current_user["id"]
 
@@ -74,7 +70,6 @@ def docs(
     if not (file_bytes or raw_text or qa_data):
         raise HTTPException(status_code=400, detail="No valid input provided")
 
-    # Pass all collected inputs
     return process_and_index_data(
         user_id=user_id,
         filename=filename,
@@ -83,14 +78,13 @@ def docs(
         qa_json=qa_data
     )
 
+
 @rag_router.get("/crawl/discover")
 def discover_links(
     url: str = Query(..., description="Base website URL"),
     current_user: dict = Depends(get_current_user)
 ):
     """Discover all internal endpoints from the given website."""
-
-    # Explicitly validate user
     if not current_user or "id" not in current_user:
         raise HTTPException(status_code=401, detail="Invalid or unauthorized user")
 
@@ -98,9 +92,9 @@ def discover_links(
 
     return {
         "base_url": url,
-        "endpoints": endpoints,
-        "user_id": current_user["id"]
+        "endpoints": endpoints
     }
+
 
 @rag_router.post("/crawl/fetch")
 def fetch_and_index(
@@ -131,21 +125,16 @@ def fetch_and_index(
             continue
 
         if el.name in ["h1", "h2", "h3", "h4"]:
-            # If we already had a heading + its block, save it
             if current_heading or current_block:
                 grouped_chunks.append({
                     "heading": current_heading,
                     "content": " ".join(current_block).strip()
                 })
                 current_block = []
-
-            # Start new heading
             current_heading = text
-
-        else:  # paragraph or list item
+        else:
             current_block.append(text)
 
-    # Don’t forget the last block
     if current_heading or current_block:
         grouped_chunks.append({
             "heading": current_heading,
@@ -164,12 +153,12 @@ def fetch_and_index(
             user_id=user_id,
             raw_text=combined_text,
             filename=endpoint.strip("/"),
-            source_type="web_crawling"  # requires updated process_and_index_data with source_type
+            source_type="web_crawling"
         )
 
         results.append({
             "heading": block["heading"],
-            "preview": combined_text[:120],  # small preview
+            "preview": combined_text[:120],
             "chunks_indexed": result["chunks_indexed"]
         })
 
