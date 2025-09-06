@@ -22,7 +22,8 @@ def process_and_index_data(
     filename: str = None,
     file_bytes: bytes = None,
     raw_text: str = None,
-    qa_json: str | list = None
+    qa_json: str | list = None,
+    source_type: str = None  # NEW param to override source (e.g., "web_crawling")
 ):
     """
     Process data (PDF, DOCX, TXT, raw text, or QA JSON), chunk, embed, and upsert into Pinecone.
@@ -33,6 +34,7 @@ def process_and_index_data(
         file_bytes: File bytes
         raw_text: Raw text input
         qa_json: JSON string OR list with [{"question": "...", "answer": "..."}]
+        source_type: Optional override for source ("web_crawling", "manual_input", etc.)
     """
 
     # Unique index name per user
@@ -73,11 +75,14 @@ def process_and_index_data(
         file_chunks = text_splitter.split_text(text)
         chunks.extend({"text": c, "source": filename} for c in file_chunks)
 
-    # Case 2: Raw text
+    # Case 2: Raw text (manual input or web crawling)
     if raw_text:
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
         text_chunks = text_splitter.split_text(raw_text)
-        chunks.extend({"text": c, "source": "raw_text"} for c in text_chunks)
+        chunks.extend({
+            "text": c,
+            "source": source_type if source_type else "raw_text"
+        } for c in text_chunks)
 
     # Case 3: QA JSON
     if qa_json:

@@ -120,15 +120,23 @@ def fetch_and_index(
 
     soup = BeautifulSoup(response.text, "html.parser")
     # Extract visible text only
-    text = " ".join([t.get_text(" ", strip=True) for t in soup.find_all(["p", "li", "h1", "h2", "h3", "h4"]) if t.get_text(strip=True)])
+    text = " ".join(
+        [
+            t.get_text(" ", strip=True)
+            for t in soup.find_all(["p", "li", "h1", "h2", "h3", "h4"])
+            if t.get_text(strip=True)
+        ]
+    )
 
     if not text:
         raise HTTPException(status_code=400, detail=f"No text found on {full_url}")
 
+    # ✅ Pass explicit "web_crawling" source
     result = process_and_index_data(
         user_id=user_id,
         raw_text=text,
-        filename=endpoint.strip("/")
+        filename=endpoint.strip("/"),
+        source="web_crawling"
     )
 
     return {
