@@ -137,5 +137,4 @@ def process_and_index_data(
     return {
         "chunks_indexed": len(chunks),
         "index_name": INDEX_NAME,
-        "user_id": user_id
     }
