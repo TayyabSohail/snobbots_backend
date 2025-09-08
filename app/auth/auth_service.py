@@ -110,7 +110,8 @@ async def register_user(register_data: RegisterRequest) -> Dict[str, Any]:
             "user": {
                 "id": user_id,
                 "email": register_data.email,
-                "name": register_data.name
+                "name": register_data.name,
+                "approved": True
             }
         }
 
