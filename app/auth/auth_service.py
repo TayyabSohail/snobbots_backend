@@ -42,12 +42,12 @@ async def ensure_user_in_database(user_data: Dict[str, Any]) -> Dict[str, Any]:
 
             return success_response(
                 "User inserted successfully",
-                {"user": insert_response.data[0], "inserted": True}
+                {"user": insert_result["data"][0], "inserted": True}
             )
 
         return success_response(
             "User already exists",
-            {"user": response.data[0], "inserted": False}
+            {"user": db_check["data"][0], "inserted": False}
         )
 
     except Exception as e:
@@ -58,23 +58,7 @@ async def ensure_user_in_database(user_data: Dict[str, Any]) -> Dict[str, Any]:
 async def register_user(register_data: RegisterRequest) -> Dict[str, Any]:
     supabase = get_supabase_client()
     try:
-        # Step 1: Check if user already exists in our database first
-        admin_supabase = get_admin_supabase_client()
-        existing_user = (
-            admin_supabase.table('registered_users')
-            .select('id, email')
-            .eq('email', register_data.email)
-            .maybe_single()
-            .execute()
-        )
-        
-        if existing_user.data:
-            return error_response(
-                "User with this email already exists. Please log in or reset your password.",
-                code="USER_EXISTS"
-            )
-
-        # Step 2: Sign up user in Supabase Auth
+        # Step 1: Sign up user in Supabase Auth
         auth_response = supabase.auth.sign_up({
             'email': register_data.email,
             'password': register_data.password,
@@ -103,19 +87,18 @@ async def register_user(register_data: RegisterRequest) -> Dict[str, Any]:
                 code="USER_EXISTS"
             )
 
-        # Step 3: Insert user immediately if email is confirmed
+        # Step 3: Insert user into database (regardless of email confirmation status)
         user_id = auth_response.user.id
         email_confirmed = getattr(auth_response.user, "email_confirmed_at", None)
 
-        if email_confirmed:
-            user_result = await ensure_user_in_database({
-                'id': user_id,
-                'email': register_data.email,
-                'name': register_data.name,
-                'approved': True
-            })
-            if not user_result["success"]:
-                return user_result
+        user_result = await ensure_user_in_database({
+            'id': user_id,
+            'email': register_data.email,
+            'name': register_data.name,
+            'approved': True
+        })
+        if not user_result["success"]:
+            return user_result
 
         # Step 4: Return standard API response
         return {
@@ -140,6 +123,7 @@ async def register_user(register_data: RegisterRequest) -> Dict[str, Any]:
                 code="USER_EXISTS"
             )
         return error_response(str(e), code="REGISTER_ERROR")
+
 # ---------- services/auth_service.py ----------
 async def login_user(login_data: LoginRequest) -> Dict[str, Any]:
     try:
