@@ -22,11 +22,15 @@ async def ensure_user_in_database(user_data: Dict[str, Any]) -> Dict[str, Any]:
             .execute()
         )
 
-        db_check = handle_supabase_error(response, default_error="Failed to check user in database")
-        if not db_check["success"]:
-            return db_check
+        # Check for actual Supabase errors first
+        if hasattr(response, "error") and response.error:
+            return error_response(
+                message=response.error.message,
+                code="SUPABASE_ERROR"
+            )
 
-        if not db_check["data"]:
+        # Handle empty results (new user) vs existing user
+        if not response.data:
             user_to_insert = {
                 'id': user_data['id'],
                 'email': user_data['email'],
@@ -35,19 +39,28 @@ async def ensure_user_in_database(user_data: Dict[str, Any]) -> Dict[str, Any]:
             }
 
             insert_response = supabase.table('registered_users').insert([user_to_insert]).execute()
-            insert_result = handle_supabase_error(insert_response, default_error="Failed to insert user")
-
-            if not insert_result["success"]:
-                return insert_result
+            
+            # Check for insert errors
+            if hasattr(insert_response, "error") and insert_response.error:
+                return error_response(
+                    message=insert_response.error.message,
+                    code="INSERT_ERROR"
+                )
+            
+            if not insert_response.data:
+                return error_response(
+                    message="Failed to insert user",
+                    code="INSERT_NO_DATA"
+                )
 
             return success_response(
                 "User inserted successfully",
-                {"user": insert_result["data"][0], "inserted": True}
+                {"user": insert_response.data[0], "inserted": True}
             )
 
         return success_response(
             "User already exists",
-            {"user": db_check["data"][0], "inserted": False}
+            {"user": response.data[0], "inserted": False}
         )
 
     except Exception as e:
