@@ -26,7 +26,7 @@ async def ensure_user_in_database(user_data: Dict[str, Any]) -> Dict[str, Any]:
         if not db_check["success"]:
             return db_check
 
-        if not response.data:
+        if not db_check["data"]:
             user_to_insert = {
                 'id': user_data['id'],
                 'email': user_data['email'],
