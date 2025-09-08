@@ -42,11 +42,11 @@ async def register(user_data: RegisterRequest):
     try:
         result = await register_user(user_data)
         
-        if 'error' in result:
-            logger.warning(f"Registration failed for {user_data.email}: {result['error']}")
+        if not result.get("success", True):
+            logger.warning(f"Registration failed for {user_data.email}: {result.get('message', 'Unknown error')}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=result['error']
+                detail=result.get('message', 'Registration failed')
             )
         
         logger.info(f"User {user_data.email} registered successfully")
