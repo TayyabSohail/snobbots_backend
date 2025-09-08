@@ -17,8 +17,8 @@ async def ensure_user_in_database(user_data: Dict[str, Any]) -> Dict[str, Any]:
     try:
         response = (
             supabase.table('registered_users')
-            .select('id')
-            .or_(f"id.eq.{user_data['id']},email.eq.{user_data['email']}")
+            .select('id, email')
+            .eq('email', user_data['email'])
             .execute()
         )
 
@@ -29,6 +29,11 @@ async def ensure_user_in_database(user_data: Dict[str, Any]) -> Dict[str, Any]:
                 code="SUPABASE_ERROR"
             )
 
+        # Debug logging
+        logger.info(f"Database check for email {user_data['email']}: found {len(response.data) if response.data else 0} users")
+        if response.data:
+            logger.info(f"Existing user data: {response.data[0]}")
+        
         # Handle empty results (new user) vs existing user
         if not response.data:
             user_to_insert = {
@@ -71,6 +76,25 @@ async def ensure_user_in_database(user_data: Dict[str, Any]) -> Dict[str, Any]:
 async def register_user(register_data: RegisterRequest) -> Dict[str, Any]:
     supabase = get_supabase_client()
     try:
+        # Check BOTH Supabase Auth AND your database to prevent duplicate registrations
+        supabase_admin = get_admin_supabase_client()
+        
+        # Check your custom table by EMAIL only
+        existing_user = supabase_admin.table('registered_users').select('email').eq('email', register_data.email).execute()
+        
+        # Check Supabase Auth users table by EMAIL only
+        auth_users = supabase_admin.auth.admin.list_users()
+        
+        # Check if email exists in either place
+        email_exists_in_db = existing_user.data and len(existing_user.data) > 0
+        email_exists_in_auth = any(user.email == register_data.email for user in auth_users)
+        
+        if email_exists_in_db or email_exists_in_auth:
+            return error_response(
+                "User with this email already exists. Please log in or reset your password.",
+                code="USER_EXISTS"
+            )
+        
         # Step 1: Sign up user in Supabase Auth
         auth_response = supabase.auth.sign_up({
             'email': register_data.email,
