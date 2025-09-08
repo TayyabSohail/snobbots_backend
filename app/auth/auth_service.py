@@ -58,77 +58,21 @@ async def ensure_user_in_database(user_data: Dict[str, Any]) -> Dict[str, Any]:
 async def register_user(register_data: RegisterRequest) -> Dict[str, Any]:
     supabase = get_supabase_client()
     try:
-        # Step 1: Check if user already exists in our database first
-        admin_supabase = get_admin_supabase_client()
-        existing_user = (
-            admin_supabase.table('registered_users')
-            .select('id, email')
-            .eq('email', register_data.email)
-            .maybe_single()
-            .execute()
-        )
-        
-        if existing_user.data:
-            logger.warning(f"User {register_data.email} already exists in registered_users table")
-            return error_response(
-                "User with this email already exists. Please log in or reset your password.",
-                code="USER_EXISTS"
-            )
-
-        # Step 1.5: Double-check with Supabase Auth users table (extra safety net)
-        try:
-            auth_users_check = (
-                admin_supabase.table('auth.users')
-                .select('id, email')
-                .eq('email', register_data.email)
-                .maybe_single()
-                .execute()
-            )
-            
-            if auth_users_check.data:
-                logger.warning(f"User {register_data.email} already exists in auth.users table")
-                return error_response(
-                    "User with this email already exists. Please log in or reset your password.",
-                    code="USER_EXISTS"
-                )
-        except Exception as e:
-            # If we can't access auth.users table, log it but continue
-            logger.warning(f"Could not check auth.users table: {str(e)}")
-            # Continue with registration attempt
-
-        # Step 2: Sign up user in Supabase Auth
+        # Step 1: Sign up user in Supabase Auth
         auth_response = supabase.auth.sign_up({
             'email': register_data.email,
             'password': register_data.password,
             'options': {'data': {'name': register_data.name}}
         })
 
-        # Debug logging
-        logger.info(f"Auth response for {register_data.email}: user={auth_response.user}, session={getattr(auth_response, 'session', None)}")
-
-        # Step 3: Check if signup failed due to existing user
-        # The key insight: if user already exists, auth_response.user will be None or empty
-        if not auth_response.user or not hasattr(auth_response.user, 'id') or not auth_response.user.id:
-            logger.warning(f"User {register_data.email} already exists in Supabase Auth or signup failed")
+        # Check if user already exists (auth_response.user will be None if user exists)
+        if not auth_response.user:
             return error_response(
                 "User with this email already exists. Please log in or reset your password.",
                 code="USER_EXISTS"
             )
 
-        # Step 4: Check for Supabase Auth specific errors
-        if hasattr(auth_response, 'error') and auth_response.error:
-            error_message = str(auth_response.error.message).lower()
-            if any(phrase in error_message for phrase in ["already registered", "already exists", "duplicate", "user already", "email already"]):
-                return error_response(
-                    "User with this email already exists. Please log in or reset your password.",
-                    code="USER_EXISTS"
-                )
-            return error_response(
-                f"Signup failed: {auth_response.error.message}",
-                code="AUTH_SIGNUP_FAILED"
-            )
-
-        # Step 5: Insert user immediately if email is confirmed
+        # Step 2: Insert user immediately if email is confirmed
         user_id = auth_response.user.id
         email_confirmed = getattr(auth_response.user, "email_confirmed_at", None)
 
@@ -143,7 +87,7 @@ async def register_user(register_data: RegisterRequest) -> Dict[str, Any]:
             if not user_result["success"]:
                 return user_result
 
-        # Step 6: Return standard API response (no change for frontend)
+        # Step 3: Return standard API response (no change for frontend)
         return {
             "success": True,
             "message": "Please confirm your email to complete signup",
@@ -157,12 +101,11 @@ async def register_user(register_data: RegisterRequest) -> Dict[str, Any]:
 
     except Exception as e:
         error_msg = str(e).lower()
-        if any(x in error_msg for x in ["already registered", "already exists", "duplicate", "user already", "email already"]):
+        if any(x in error_msg for x in ["already registered", "already exists", "duplicate", "user already"]):
             return error_response(
                 "User with this email already exists. Please log in or reset your password.",
                 code="USER_EXISTS"
             )
-        logger.error(f"Registration error for {register_data.email}: {str(e)}")
         return error_response(str(e), code="REGISTER_ERROR")
 
 # ---------- services/auth_service.py ----------
