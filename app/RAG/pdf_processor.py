@@ -23,7 +23,8 @@ def process_and_index_data(
     file_bytes: bytes = None,
     raw_text: str = None,
     qa_json: str | list = None,
-    source_type: str = None  # NEW param to override source (e.g., "web_crawling")
+    source_type: str = None,  # NEW param to override source (e.g., "web_crawling")
+    chatbot_title:str = None
 ):
     """
     Process data (PDF, DOCX, TXT, raw text, or QA JSON), chunk, embed, and upsert into Pinecone.
@@ -49,6 +50,10 @@ def process_and_index_data(
             spec=ServerlessSpec(cloud="aws", region="us-east-1")
         )
     index = pc.Index(INDEX_NAME)
+
+    if not chatbot_title:
+        raise ValueError("chatbot_title is required to create a namespace")
+    namespace = chatbot_title.strip().lower().replace(" ", "_")
 
     # Collect chunks with source info
     chunks = []
@@ -132,9 +137,10 @@ def process_and_index_data(
             }
         })
 
-    index.upsert(vectors=vectors)
+    index.upsert(vectors=vectors,namespace=namespace)
 
     return {
         "chunks_indexed": len(chunks),
         "index_name": INDEX_NAME,
+        "namespace" : namespace
     }
