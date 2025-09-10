@@ -21,6 +21,9 @@ def generate_response(query: str, user_id: str,chatbot_title:str):
         return
 
     index = pc.Index(index_name)
+    
+    if not chatbot_title:
+        raise ValueError("chatbot_title is required to create a namespace")
     namespace = chatbot_title.strip().lower().replace(" ", "_")
 
     # Embedding for query
