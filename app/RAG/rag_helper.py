@@ -9,7 +9,7 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 
 
-def generate_response(query: str, user_id: str):
+def generate_response(query: str, user_id: str,chatbot_title:str):
     """Search Pinecone (user-specific index) and stream AI response with context."""
 
     # Build index name per user
@@ -21,6 +21,7 @@ def generate_response(query: str, user_id: str):
         return
 
     index = pc.Index(index_name)
+    namespace = chatbot_title.strip().lower().replace(" ", "_")
 
     # Embedding for query
     embed_resp = client.embeddings.create(
@@ -31,6 +32,7 @@ def generate_response(query: str, user_id: str):
 
     # Query Pinecone for most relevant chunks
     results = index.query(
+        namespace=namespace,
         vector=query_embedding,
         top_k=3,
         include_metadata=True

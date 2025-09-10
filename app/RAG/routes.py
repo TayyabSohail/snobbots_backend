@@ -17,6 +17,7 @@ rag_router = APIRouter(prefix="/rag", tags=["RAG"])
 
 class QueryRequest(BaseModel):
     query: str
+    chatbot_title: str
 
 
 @rag_router.post("/ask")
@@ -25,7 +26,7 @@ async def ask(
     current_user: dict = Depends(get_current_user)
 ):
     user_id = current_user["id"]
-    full_text = "".join([chunk for chunk in generate_response(request.query, user_id)])
+    full_text = "".join([chunk for chunk in generate_response(request.query, user_id,request.chatbot_title)])
     return JSONResponse({"answer": full_text})
 
 
@@ -39,6 +40,7 @@ def docs(
     file: Optional[UploadFile] = File(None),
     raw_text: Optional[str] = Form(None),
     qa_json: Optional[str] = Form(None),
+    chatbot_title: str = Form(...),
     current_user: dict = Depends(get_current_user)
 ):
     """Unified endpoint: accepts file (.pdf/.docx/.txt),
@@ -75,7 +77,8 @@ def docs(
         filename=filename,
         file_bytes=file_bytes,
         raw_text=raw_text,
-        qa_json=qa_data
+        qa_json=qa_data,
+        chatbot_title=chatbot_title
     )
 
 
@@ -100,6 +103,7 @@ def discover_links(
 def fetch_and_index(
     base_url: str = Query(..., description="Base website URL"),
     endpoint: str = Query(..., description="Specific endpoint path (e.g., /faq)"),
+    chatbot_title: str = Query(..., description="Unique chatbot title"),
     current_user: dict = Depends(get_current_user)
 ):
     """Fetch a specific endpoint and index its content into RAG pipeline with heading + body grouping."""
@@ -153,7 +157,8 @@ def fetch_and_index(
             user_id=user_id,
             raw_text=combined_text,
             filename=endpoint.strip("/"),
-            source_type="web_crawling"
+            source_type="web_crawling",
+            chatbot_title=chatbot_title
         )
 
         results.append({
