@@ -17,16 +17,15 @@ rag_router = APIRouter(prefix="/rag", tags=["RAG"])
 
 class QueryRequest(BaseModel):
     query: str
+    chatbot_id: str
     chatbot_title: str
 
 
 @rag_router.post("/ask")
 async def ask(
     request: QueryRequest,
-    current_user: dict = Depends(get_current_user)
 ):
-    user_id = current_user["id"]
-    full_text = "".join([chunk for chunk in generate_response(request.query, user_id,request.chatbot_title)])
+    full_text = "".join([chunk for chunk in generate_response(request.query, request.chatbot_id,request.chatbot_title)])
     return JSONResponse({"answer": full_text})
 
 
@@ -40,13 +39,13 @@ def docs(
     file: Optional[UploadFile] = File(None),
     raw_text: Optional[str] = Form(None),
     qa_json: Optional[str] = Form(None),
+    chatbot_id:str = Form(...),
     chatbot_title: str = Form(...),
     current_user: dict = Depends(get_current_user)
 ):
     """Unified endpoint: accepts file (.pdf/.docx/.txt),
     raw text, and/or QA JSON (question-answer pairs).
     """
-    user_id = current_user["id"]
 
     file_bytes = None
     filename = None
@@ -73,11 +72,11 @@ def docs(
         raise HTTPException(status_code=400, detail="No valid input provided")
 
     return process_and_index_data(
-        user_id=user_id,
         filename=filename,
         file_bytes=file_bytes,
         raw_text=raw_text,
         qa_json=qa_data,
+        chatbot_id=chatbot_id,
         chatbot_title=chatbot_title
     )
 
