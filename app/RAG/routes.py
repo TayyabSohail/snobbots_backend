@@ -12,21 +12,28 @@ from typing import Optional
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 import json
+from app.RAG.api_key_service import validate_api_key
+import secrets
+import string
 
 rag_router = APIRouter(prefix="/rag", tags=["RAG"])
 
 class QueryRequest(BaseModel):
     query: str
-    chatbot_title: str
+    api_key: str 
 
 
 @rag_router.post("/ask")
-async def ask(
-    request: QueryRequest,
-    current_user: dict = Depends(get_current_user)
-):
-    user_id = current_user["id"]
-    full_text = "".join([chunk for chunk in generate_response(request.query, user_id,request.chatbot_title)])
+async def ask(request: QueryRequest):
+    """Ask questions using API key (no authentication required)."""
+    # Validate API key
+    api_data = validate_api_key(request.api_key)
+    if not api_data:
+        raise HTTPException(status_code=401, detail="Invalid or inactive API key")
+    
+    user_id = api_data['user_id']
+    chatbot_title = api_data['chatbot_title'] 
+    full_text = "".join([chunk for chunk in generate_response(request.query, user_id, chatbot_title)])
     return JSONResponse({"answer": full_text})
 
 
@@ -72,7 +79,8 @@ def docs(
     if not (file_bytes or raw_text or qa_data):
         raise HTTPException(status_code=400, detail="No valid input provided")
 
-    return process_and_index_data(
+    # Process and index the documents
+    result = process_and_index_data(
         user_id=user_id,
         filename=filename,
         file_bytes=file_bytes,
@@ -80,6 +88,38 @@ def docs(
         qa_json=qa_data,
         chatbot_title=chatbot_title
     )
+    
+    # Automatically create API key for this chatbot if it doesn't exist
+    try:
+        from app.supabase import get_supabase_client
+        supabase = get_supabase_client()
+        
+        # Check if API key already exists for this user+chatbot
+        existing = supabase.table('chatbot_configs').select('api_key').eq('user_id', user_id).eq('chatbot_title', chatbot_title).execute()
+        
+        if not existing.data:
+            # Generate API key
+            api_key = 'snb_' + ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32))
+            
+            # Insert API key
+            supabase.table('chatbot_configs').insert({
+                'user_id': user_id,
+                'chatbot_title': chatbot_title,
+                'api_key': api_key,
+                'is_active': True
+            }).execute()
+            
+            result['api_key'] = api_key
+            result['message'] = f"Documents processed and API key created: {api_key}"
+        else:
+            result['api_key'] = existing.data[0]['api_key']
+            result['message'] = "Documents processed (API key already exists)"
+            
+    except Exception as e:
+        result['api_key'] = None
+        result['message'] = f"Documents processed but API key creation failed: {str(e)}"
+    
+    return result
 
 
 @rag_router.get("/crawl/discover")
@@ -173,3 +213,5 @@ def fetch_and_index(
         "blocks_extracted": len(grouped_chunks),
         "indexed_blocks": results
     }
+# API key management: Create manually in Supabase dashboard
+# Go to chatbot_configs table and insert new rows with user_id, chatbot_title, api_key
