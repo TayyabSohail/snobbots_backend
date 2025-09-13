@@ -33,3 +33,23 @@ def validate_api_key(api_key: str) -> Optional[dict]:
         'user_id': result.data[0]['user_id'],
         'chatbot_title': result.data[0]['chatbot_title']
     }
+    
+    
+def get_api_key(user_id: str, chatbot_title: str) -> Optional[str]:
+    """Fetch API key using user_id and chatbot_title."""
+    supabase = get_supabase_client()
+    
+    result = (
+        supabase
+        .table('chatbot_configs')
+        .select('api_key')
+        .eq('user_id', user_id)
+        .eq('chatbot_title', chatbot_title)
+        .eq('is_active', True)   # keep same check for active key
+        .execute()
+    )
+    
+    if not result.data:
+        return None
+    
+    return result.data[0]['api_key']
