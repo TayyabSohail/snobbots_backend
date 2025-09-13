@@ -5,14 +5,13 @@ from app.RAG.rag_helper import generate_response
 from fastapi.responses import JSONResponse
 from fastapi import UploadFile, File, Form, Query, HTTPException
 from app.RAG.pdf_processor import process_and_index_data
-from app.RAG.auth_utils import get_current_user
+from app.RAG.auth_utils import get_current_user,validate_api_key
 from app.RAG.link_finder import get_internal_links
 from fastapi import Depends
 from typing import Optional
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 import json
-from app.RAG.api_key_service import validate_api_key
 import secrets
 import string
 
