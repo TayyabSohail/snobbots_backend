@@ -9,15 +9,15 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 
 
-def generate_response(query: str, chatbot_id: str,chatbot_title:str):
+def generate_response(query: str, user_id: str,chatbot_title:str):
     """Search Pinecone (user-specific index) and stream AI response with context."""
 
     # Build index name per user
-    index_name = f"snobbots-{chatbot_id.lower().replace(' ', '_')}"
+    index_name = f"snobbots-{user_id.lower().replace(' ', '_')}"
 
     # ✅ Check if index exists
     if index_name not in pc.list_indexes().names():
-        yield f"⚠️ No knowledge base found for user `{chatbot_id}`. Please upload documents first."
+        yield f"⚠️ No knowledge base found for user `{user_id}`. Please upload documents first."
         return
 
     index = pc.Index(index_name)

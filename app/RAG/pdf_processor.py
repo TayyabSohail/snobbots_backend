@@ -18,29 +18,28 @@ pc = Pinecone(api_key=PINECONE_API_KEY)
 
 
 def process_and_index_data(
+    user_id: str,
     filename: str = None,
     file_bytes: bytes = None,
     raw_text: str = None,
     qa_json: str | list = None,
-    source_type: str = None,
-    chatbot_id: str = None,
+    source_type: str = None,  # NEW param to override source (e.g., "web_crawling")
     chatbot_title:str = None
 ):
     """
     Process data (PDF, DOCX, TXT, raw text, or QA JSON), chunk, embed, and upsert into Pinecone.
 
     Args:
+        user_id: ID of the user
         filename: Optional filename for file (PDF, DOCX, TXT)
         file_bytes: File bytes
         raw_text: Raw text input
         qa_json: JSON string OR list with [{"question": "...", "answer": "..."}]
         source_type: Optional override for source ("web_crawling", "manual_input", etc.)
-        chatbot_id: unique id of the chatbot
-        chatbot_title: unique title of the chatbot e.g Clothing store bot
     """
 
     # Unique index name per user
-    INDEX_NAME = f"snobbots-{chatbot_id.lower().replace(' ', '_')}"
+    INDEX_NAME = f"snobbots-{user_id.lower().replace(' ', '_')}"
 
     # Ensure index exists
     if INDEX_NAME not in pc.list_indexes().names():
@@ -126,7 +125,7 @@ def process_and_index_data(
         )
         embedding = resp.data[0].embedding
 
-        unique_id = f"{chatbot_id}_{chunk['source']}_{i}_{uuid.uuid4().hex[:8]}"
+        unique_id = f"{user_id}_{chunk['source']}_{i}_{uuid.uuid4().hex[:8]}"
 
         vectors.append({
             "id": unique_id,
@@ -134,7 +133,7 @@ def process_and_index_data(
             "metadata": {
                 "chunk_text": chunk["text"],
                 "source": chunk["source"],
-                "chatbot_id": chatbot_id
+                "user_id": user_id
             }
         })
 
