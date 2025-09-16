@@ -203,7 +203,6 @@ def update_chatbot_api(
 @rag_router.post("/appearance")
 async def create_or_update_appearance(
     chatbot_title: str = Form(...),
-    bot_title: Optional[str] = Form(None),
     avatar: Optional[UploadFile] = File(None),
     theme: Optional[Theme] = Form(None),
     primary_color_rgb: Optional[str] = Form(None),
@@ -253,10 +252,9 @@ async def create_or_update_appearance(
         appearance_data = {
             "user_id": user_id,
             "chatbot_title": chatbot_title,
+            "bot_title": chatbot_title,  # Always set bot_title same as chatbot_title
         }
         
-        if bot_title is not None:
-            appearance_data["bot_title"] = bot_title
         if bot_avatar_url is not None:
             appearance_data["bot_avatar_url"] = bot_avatar_url
         if theme is not None:
@@ -332,7 +330,7 @@ def get_appearance(
             # Return default values if no appearance settings exist
             return {
                 "chatbot_title": chatbot_title,
-                "bot_title": None,
+                "bot_title": chatbot_title,  # Same as chatbot_title
                 "bot_avatar_url": None,
                 "theme": None,
                 "primary_color_rgb": None,
