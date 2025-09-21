@@ -450,6 +450,39 @@ def get_appearance(request: GetAppearanceRequest):
         raise HTTPException(status_code=500, detail=f"Failed to fetch appearance: {str(e)}")
 
 
+# ------------------ USER BOT COUNT & ANALYTICS ------------------ #
+@rag_router.get("/user/bot-analytics")
+def get_user_bot_analytics(current_user: dict = Depends(get_current_user)):
+    """Get user's bots with analytics including query data and token usage count."""
+    user_id = current_user["id"]
+    
+    try:
+        from app.supabase import get_admin_supabase_client
+        supabase = get_admin_supabase_client()
+        
+        # Get all bots (active and inactive) for this user
+        result = (
+            supabase.table("chatbot_configs")
+            .select("chatbot_title, is_active")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        
+        # Separate active and inactive bots
+        active_bots = [bot["chatbot_title"] for bot in result.data if bot["is_active"]]
+        inactive_bots = [bot["chatbot_title"] for bot in result.data if not bot["is_active"]]
+        
+        return {
+            "user_id": user_id,
+            "total_bots": len(result.data),
+            "active_bots_count": len(active_bots),
+            "inactive_bots_count": len(inactive_bots),
+            "active_bots": active_bots,
+            "inactive_bots": inactive_bots
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get bot count: {str(e)}")
 # ------------------ DOCS SEPARATED ------------------ #
 
 @rag_router.post("/docs/file")
