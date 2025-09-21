@@ -74,6 +74,11 @@ class AppearanceRequest(BaseModel):
     position: Optional[Position] = None
 
 
+class GetAppearanceRequest(BaseModel):
+    chatbot_title: str
+    api_key: str
+
+
 class AppearanceResponse(BaseModel):
     id: str
     user_id: str
@@ -403,14 +408,15 @@ async def update_appearance(
         raise HTTPException(status_code=500, detail=f"Appearance update failed: {str(e)}")
 
 
-@rag_router.get("/appearance/{chatbot_title}")
-def get_appearance(
-    chatbot_title: str,
-    current_user: dict = Depends(get_current_user),
-):
-    """Get current chatbot appearance settings."""
-    user_id = current_user["id"]
-    chatbot_title = chatbot_title.lower()
+@rag_router.post("/appearance")
+def get_appearance(request: GetAppearanceRequest):
+    """Get current chatbot appearance settings using API key."""
+    api_data = validate_api_key(request.api_key)
+    if not api_data:
+        raise HTTPException(status_code=401, detail="Invalid or inactive API key")
+
+    user_id = api_data["user_id"]
+    chatbot_title = request.chatbot_title.lower()
 
     try:
         from app.supabase import get_admin_supabase_client
