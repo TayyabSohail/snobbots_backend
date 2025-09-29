@@ -14,6 +14,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.core.config import settings
 from app.auth import auth_router
 from app.RAG.routes import rag_router
+from app.s3.routes import s3_router
 from app.helpers.response_helper import error_response
 
 # ---------------------------
@@ -107,7 +108,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 # ---------------------------
 app.include_router(auth_router, prefix=settings.api_prefix)
 app.include_router(rag_router,prefix=settings.api_prefix)
-
+app.include_router(s3_router,prefix=settings.api_prefix)
 
 # ---------------------------
 # Root endpoint

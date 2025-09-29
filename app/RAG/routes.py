@@ -1,13 +1,13 @@
 import requests
-from fastapi import APIRouter, Depends, Query, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import List
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 import secrets
 import string
-import json
+
 
 from app.RAG.rag_helper import generate_response
 from app.RAG.pdf_processor import process_and_index_data
