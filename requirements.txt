@@ -26,3 +26,6 @@ openai
 python-multipart
 python-docx
 bs4
+
+# For s3
+boto3
