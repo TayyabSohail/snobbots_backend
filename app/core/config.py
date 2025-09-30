@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     supabase_service_role_key: str = Field(..., env="SUPABASE_SERVICE_ROLE_KEY")
     openai_api_key:str
     pinecone_api_key:str
+    aws_access_key:str
+    aws_secret_access_key: str
+    aws_bucket_name:str
+    aws_region:str
     
     # App Configuration
     debug: bool = Field(default=False, env="DEBUG")
