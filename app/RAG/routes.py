@@ -1,6 +1,7 @@
 import requests
-from fastapi import APIRouter, Depends, Query, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
+
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from bs4 import BeautifulSoup
@@ -18,6 +19,9 @@ rag_router = APIRouter(prefix="/rag", tags=["RAG"])
 
 
 # ------------------ MODELS ------------------ #
+
+class CreateChatbotRequest(BaseModel):
+    chatbot_title: str
 
 class QueryRequest(BaseModel):
     query: str
@@ -51,6 +55,10 @@ class FetchRequest(BaseModel):
     base_url: str
     endpoint: str
     chatbot_title: str
+    
+class FlushRequest(BaseModel):
+    chatbot_title: str
+
 
 
 class CreateChatbotRequest(BaseModel):
@@ -483,6 +491,7 @@ def get_user_bot_analytics(current_user: dict = Depends(get_current_user)):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get bot count: {str(e)}")
+
 # ------------------ DOCS SEPARATED ------------------ #
 
 @rag_router.post("/docs/file")
@@ -661,3 +670,37 @@ async def ask(request: QueryRequest):
 
     full_text = "".join([chunk for chunk in generate_response(request.query, user_id, chatbot_title)])
     return JSONResponse({"answer": full_text})
+
+# ------------------ FLUSH ------------------ #
+
+@rag_router.post("/flush")
+def flush_namespace(
+    request: FlushRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Flush all vectors for a chatbot's namespace."""
+    user_id = current_user["id"]
+    chatbot_title = request.chatbot_title.lower()
+    namespace = chatbot_title.strip().replace(" ", "_")
+
+    INDEX_NAME = f"snobbots-{user_id.lower().replace(' ', '_')}"
+
+    try:
+        from app.RAG.pdf_processor import pc  # reuse Pinecone client
+
+        if INDEX_NAME not in pc.list_indexes().names():
+            raise HTTPException(status_code=404, detail=f"Index '{INDEX_NAME}' not found")
+
+        index = pc.Index(INDEX_NAME)
+
+        # ✅ delete all vectors in namespace
+        index.delete(delete_all=True, namespace=namespace)
+
+        return {
+            "message": f"Namespace '{namespace}' flushed successfully from index '{INDEX_NAME}'",
+            "namespace": namespace,
+            "index_name": INDEX_NAME
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Flush failed: {str(e)}")
