@@ -24,6 +24,41 @@ rag_router = APIRouter(prefix="/rag", tags=["RAG"])
 class CreateChatbotRequest(BaseModel):
     chatbot_title: str
 
+
+
+class CreateChatbotRequest(BaseModel):
+    chatbot_title: str
+    category: str = Field(..., min_length=1, max_length=100)
+    description: Optional[str] = None
+
+
+class UpdateChatbotRequest(BaseModel):
+    chatbot_title: str
+    category: Optional[str] = Field(None, min_length=1, max_length=100)
+    description: Optional[str] = None
+
+
+class AppearanceRequest(BaseModel):
+    chatbot_title: str
+    bot_title: Optional[str] = None
+    theme: Optional[Theme] = None
+    primary_color_rgb: Optional[str] = Field(None, pattern=r'^rgb\(\d{1,3},\s*\d{1,3},\s*\d{1,3}\)$|^#[0-9A-Fa-f]{6}$')
+    border_radius_px: Optional[int] = Field(None, ge=0, le=50)
+    position: Optional[Position] = None
+
+
+class AppearanceResponse(BaseModel):
+    id: str
+    user_id: str
+    chatbot_title: str
+    bot_avatar_url: Optional[str]
+    theme: Optional[str]
+    primary_color_rgb: Optional[str]
+    border_radius_px: Optional[int]
+    position: Optional[str]
+    created_at: str
+    updated_at: str
+
 class QueryRequest(BaseModel):
     query: str
     api_key: str
@@ -55,6 +90,9 @@ class FetchRequest(BaseModel):
     
 class FlushRequest(BaseModel):
     chatbot_title: str
+    
+    
+
 
 
 # ------------------ CREATE CHATBOT ------------------ #
@@ -110,6 +148,308 @@ def create_chatbot_api(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"API key creation failed: {str(e)}")
+
+
+@rag_router.put("/update-chatbot")
+def update_chatbot_api(
+    request: UpdateChatbotRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Update chatbot category and description."""
+    user_id = current_user["id"]
+    chatbot_title = request.chatbot_title.lower()
+
+    try:
+        from app.supabase import get_admin_supabase_client
+        supabase = get_admin_supabase_client()
+
+        # Check if chatbot exists and get current data
+        existing = (
+            supabase.table("chatbot_configs")
+            .select("id, category, description, api_key")
+            .eq("user_id", user_id)
+            .eq("chatbot_title", chatbot_title)
+            .execute()
+        )
+
+        if not existing.data:
+            raise HTTPException(status_code=404, detail="Chatbot not found")
+
+        # Prepare update data - only include fields that are provided
+        update_data = {}
+        if request.category is not None:
+            update_data["category"] = request.category
+        if request.description is not None:
+            update_data["description"] = request.description
+
+        if not update_data:
+            raise HTTPException(status_code=400, detail="No fields to update")
+
+        # Update the chatbot
+        result = (
+            supabase.table("chatbot_configs")
+            .update(update_data)
+            .eq("user_id", user_id)
+            .eq("chatbot_title", chatbot_title)
+            .execute()
+        )
+
+        # Get updated data
+        updated = (
+            supabase.table("chatbot_configs")
+            .select("category, description, api_key")
+            .eq("user_id", user_id)
+            .eq("chatbot_title", chatbot_title)
+            .execute()
+        )
+
+        return {
+            "message": "Chatbot updated successfully",
+            "api_key": updated.data[0]["api_key"],
+            "category": updated.data[0]["category"],
+            "description": updated.data[0]["description"],
+            "updated_fields": list(update_data.keys())
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Chatbot update failed: {str(e)}")
+
+
+# ------------------ APPEARANCE MANAGEMENT ------------------ #
+
+@rag_router.post("/create-appearance")
+async def create_appearance(
+    chatbot_title: str = Form(...),
+    avatar: Optional[UploadFile] = File(None),
+    theme: Optional[Theme] = Form(None),
+    primary_color_rgb: Optional[str] = Form(None),
+    border_radius_px: Optional[int] = Form(None),
+    position: Optional[Position] = Form(None),
+    current_user: dict = Depends(get_current_user),
+):
+    """Create chatbot appearance settings."""
+    user_id = current_user["id"]
+    chatbot_title = chatbot_title.lower()
+
+    try:
+        from app.supabase import get_admin_supabase_client
+        supabase = get_admin_supabase_client()
+
+        # Check if chatbot exists
+        chatbot_exists = (
+            supabase.table("chatbot_configs")
+            .select("id")
+            .eq("user_id", user_id)
+            .eq("chatbot_title", chatbot_title)
+            .execute()
+        )
+
+        if not chatbot_exists.data:
+            raise HTTPException(status_code=404, detail="Chatbot not found")
+
+        # Check if appearance already exists
+        existing = (
+            supabase.table("chatbot_appearance")
+            .select("id")
+            .eq("user_id", user_id)
+            .eq("chatbot_title", chatbot_title)
+            .execute()
+        )
+
+        if existing.data:
+            raise HTTPException(status_code=409, detail="Appearance settings already exist. Use update-appearance instead.")
+
+        # Handle avatar upload if provided
+        bot_avatar_url = None
+        if avatar:
+            # Validate file type
+            if not avatar.content_type.startswith('image/'):
+                raise HTTPException(status_code=400, detail="Avatar must be an image file")
+            
+            # Validate file size (max 2MB)
+            file_content = await avatar.read()
+            if len(file_content) > 2 * 1024 * 1024:  # 2MB limit
+                raise HTTPException(status_code=400, detail="Avatar file too large. Maximum size is 2MB.")
+            
+            # Convert to base64 and store in database
+            import base64
+            file_extension = avatar.filename.split('.')[-1] if '.' in avatar.filename else 'png'
+            base64_data = base64.b64encode(file_content).decode('utf-8')
+            bot_avatar_url = f"data:image/{file_extension};base64,{base64_data}"
+
+        # Prepare appearance data
+        appearance_data = {
+            "user_id": user_id,
+            "chatbot_title": chatbot_title,
+        }
+        
+        if bot_avatar_url is not None:
+            appearance_data["bot_avatar_url"] = bot_avatar_url
+        if theme is not None:
+            appearance_data["theme"] = theme.value
+        if primary_color_rgb is not None:
+            appearance_data["primary_color_rgb"] = primary_color_rgb
+        if border_radius_px is not None:
+            appearance_data["border_radius_px"] = border_radius_px
+        if position is not None:
+            appearance_data["position"] = position.value
+
+        # Create new appearance
+        result = (
+            supabase.table("chatbot_appearance")
+            .insert(appearance_data)
+            .execute()
+        )
+
+        return {
+            "message": "Appearance created successfully",
+            "appearance_data": appearance_data
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Appearance creation failed: {str(e)}")
+
+
+@rag_router.put("/update-appearance")
+async def update_appearance(
+    chatbot_title: str = Form(...),
+    avatar: Optional[UploadFile] = File(None),
+    theme: Optional[Theme] = Form(None),
+    primary_color_rgb: Optional[str] = Form(None),
+    border_radius_px: Optional[int] = Form(None),
+    position: Optional[Position] = Form(None),
+    current_user: dict = Depends(get_current_user),
+):
+    """Update chatbot appearance settings."""
+    user_id = current_user["id"]
+    chatbot_title = chatbot_title.lower()
+
+    try:
+        from app.supabase import get_admin_supabase_client
+        supabase = get_admin_supabase_client()
+
+        # Check if chatbot exists
+        chatbot_exists = (
+            supabase.table("chatbot_configs")
+            .select("id")
+            .eq("user_id", user_id)
+            .eq("chatbot_title", chatbot_title)
+            .execute()
+        )
+
+        if not chatbot_exists.data:
+            raise HTTPException(status_code=404, detail="Chatbot not found")
+
+        # Check if appearance exists
+        existing = (
+            supabase.table("chatbot_appearance")
+            .select("id")
+            .eq("user_id", user_id)
+            .eq("chatbot_title", chatbot_title)
+            .execute()
+        )
+
+        if not existing.data:
+            raise HTTPException(status_code=404, detail="Appearance settings not found. Use create-appearance first.")
+
+        # Handle avatar upload if provided
+        bot_avatar_url = None
+        if avatar:
+            # Validate file type
+            if not avatar.content_type.startswith('image/'):
+                raise HTTPException(status_code=400, detail="Avatar must be an image file")
+            
+            # Validate file size (max 2MB)
+            file_content = await avatar.read()
+            if len(file_content) > 2 * 1024 * 1024:  # 2MB limit
+                raise HTTPException(status_code=400, detail="Avatar file too large. Maximum size is 2MB.")
+            
+            # Convert to base64 and store in database
+            import base64
+            file_extension = avatar.filename.split('.')[-1] if '.' in avatar.filename else 'png'
+            base64_data = base64.b64encode(file_content).decode('utf-8')
+            bot_avatar_url = f"data:image/{file_extension};base64,{base64_data}"
+
+        # Prepare update data - only include fields that are provided
+        update_data = {}
+        
+        if bot_avatar_url is not None:
+            update_data["bot_avatar_url"] = bot_avatar_url
+        if theme is not None:
+            update_data["theme"] = theme.value
+        if primary_color_rgb is not None:
+            update_data["primary_color_rgb"] = primary_color_rgb
+        if border_radius_px is not None:
+            update_data["border_radius_px"] = border_radius_px
+        if position is not None:
+            update_data["position"] = position.value
+
+        if not update_data:
+            raise HTTPException(status_code=400, detail="No fields to update")
+
+        # Update appearance
+        result = (
+            supabase.table("chatbot_appearance")
+            .update(update_data)
+            .eq("user_id", user_id)
+            .eq("chatbot_title", chatbot_title)
+            .execute()
+        )
+
+        return {
+            "message": "Appearance updated successfully",
+            "updated_fields": list(update_data.keys())
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Appearance update failed: {str(e)}")
+
+
+@rag_router.get("/appearance/{chatbot_title}")
+def get_appearance(
+    chatbot_title: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Get current chatbot appearance settings."""
+    user_id = current_user["id"]
+    chatbot_title = chatbot_title.lower()
+
+    try:
+        from app.supabase import get_admin_supabase_client
+        supabase = get_admin_supabase_client()
+
+        result = (
+            supabase.table("chatbot_appearance")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("chatbot_title", chatbot_title)
+            .execute()
+        )
+
+        if not result.data:
+            # Return default values if no appearance settings exist
+            return {
+                "chatbot_title": chatbot_title,
+                "bot_avatar_url": None,
+                "theme": None,
+                "primary_color_rgb": None,
+                "border_radius_px": None,
+                "position": None,
+                "message": "No appearance settings found - using defaults"
+            }
+
+        return AppearanceResponse(**result.data[0])
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch appearance: {str(e)}")
 
 
 # ------------------ DOCS SEPARATED ------------------ #
@@ -293,7 +633,7 @@ async def ask(request: QueryRequest):
     # Call rag_helper
     full_text, usage = generate_response(request.query, user_id, chatbot_title)
 
-    # ✅ compute cost
+    # compute cost
     prompt_tokens = usage.get("prompt_tokens", 0)
     completion_tokens = usage.get("completion_tokens", 0)
     total_tokens = usage.get("total_tokens", prompt_tokens + completion_tokens)
