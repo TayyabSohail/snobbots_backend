@@ -39,6 +39,8 @@ class UserResponse(BaseModel):
     name: str
     approved: bool
     created_at: Optional[datetime] = None
+    access_token: Optional[str] = None
+    refresh_token: Optional[str] = None
 
 
 class AuthResponse(BaseModel):

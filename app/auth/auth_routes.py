@@ -42,11 +42,11 @@ async def register(user_data: RegisterRequest):
     try:
         result = await register_user(user_data)
         
-        if 'error' in result:
-            logger.warning(f"Registration failed for {user_data.email}: {result['error']}")
+        if not result.get("success", True):
+            logger.warning(f"Registration failed for {user_data.email}: {result.get('message', 'Unknown error')}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=result['error']
+                detail=result.get('message', 'Registration failed')
             )
         
         logger.info(f"User {user_data.email} registered successfully")
@@ -96,6 +96,7 @@ async def update_password(data: UpdatePasswordRequest):
         message="Password updated successfully"
     )
 
+# ---------- routes/auth.py ----------
 @auth_router.post(
     "/login",
     response_model=AuthResponse,
@@ -103,33 +104,24 @@ async def update_password(data: UpdatePasswordRequest):
     description="Login user with email and password"
 )
 async def login(user_data: LoginRequest):
-    """Login a user."""
-    try:
-        result = await login_user(user_data)
-        
-        if 'error' in result:
-            logger.warning(f"Login failed for {user_data.email}: {result['error']}")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=result['error']
-            )
-        
-        logger.info(f"User {user_data.email} logged in successfully")
-        return AuthResponse(
-            success=True,
-            message="Login successful",
-            user=result.get('user')
-        )
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Unexpected error during login: {str(e)}")
+    """Login a user with Supabase Auth."""
+    result = await login_user(user_data)
+
+    # ✅ Only raise if actual error string present
+    if result.get("error"):
+        logger.warning(f"Login failed for {user_data.email}: {result['error']}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error during login"
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=result["error"]
         )
 
+    logger.info(f"User {user_data.email} logged in successfully")
+
+    return AuthResponse(
+        success=True,
+        message="Login successful",
+        user=result["user"]
+    )
 
 @auth_router.post(
     "/reset-password",
@@ -141,22 +133,17 @@ async def reset_password(reset_data: ResetPasswordRequest):
     """Reset user password."""
     try:
         result = await reset_user_password(reset_data.email)
-        
-        if 'error' in result:
-            logger.warning(f"Password reset failed for {reset_data.email}: {result['error']}")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=result['error']
-            )
-        
-        logger.info(f"Password reset email sent to {reset_data.email}")
+
+        # Log internally if there’s an error, but always respond 200
+        if result.get('error'):
+            logger.warning(f"Password reset attempted for {reset_data.email}: {result['error']}")
+
+        # Always return success to the client
         return AuthResponse(
             success=True,
-            message="Password reset email sent successfully"
+            message="A password reset link has been sent to your email."
         )
-    
-    except HTTPException:
-        raise
+
     except Exception as e:
         logger.error(f"Unexpected error during password reset: {str(e)}")
         raise HTTPException(
