@@ -16,6 +16,9 @@ PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
 pc = Pinecone(api_key=PINECONE_API_KEY)
 
+# OpenAI pricing (as of Sept 2025)
+EMBEDDING_COST_PER_1K = 0.00013  # text-embedding-3-large
+
 
 def process_and_index_data(
     user_id: str,
@@ -24,7 +27,7 @@ def process_and_index_data(
     raw_text: str = None,
     qa_json: str | list = None,
     source_type: str = None,  # NEW param to override source (e.g., "web_crawling")
-    chatbot_title:str = None
+    chatbot_title: str = None
 ):
     """
     Process data (PDF, DOCX, TXT, raw text, or QA JSON), chunk, embed, and upsert into Pinecone.
@@ -118,12 +121,18 @@ def process_and_index_data(
 
     # Embed + upsert (append-only IDs)
     vectors = []
+    total_tokens = 0
+
     for i, chunk in enumerate(chunks):
         resp = client.embeddings.create(
             model="text-embedding-3-large",
             input=chunk["text"]
         )
         embedding = resp.data[0].embedding
+
+        # ✅ Track tokens for this request
+        if hasattr(resp, "usage"):
+            total_tokens += resp.usage.total_tokens
 
         unique_id = f"{user_id}_{chunk['source']}_{i}_{uuid.uuid4().hex[:8]}"
 
@@ -137,10 +146,11 @@ def process_and_index_data(
             }
         })
 
-    index.upsert(vectors=vectors,namespace=namespace)
+    index.upsert(vectors=vectors, namespace=namespace)
 
     return {
         "chunks_indexed": len(chunks),
         "index_name": INDEX_NAME,
-        "namespace" : namespace
+        "namespace": namespace,
+        "tokens_used": total_tokens,
     }
