@@ -76,3 +76,20 @@ def generate_presigned_url(key: str, expires_in: int = 3600) -> str:
         return url
     except ClientError as e:
         raise Exception(f"Error generating presigned URL: {e}")
+    
+def delete_file_from_s3(key: str) -> dict:
+    try:
+        # Check if the file exists first
+        s3_client.head_object(Bucket=BUCKET_NAME, Key=key)
+
+        # If no exception, file exists → delete it
+        s3_client.delete_object(Bucket=BUCKET_NAME, Key=key)
+        return {"status": "success", "key": key, "deleted": True}
+
+    except ClientError as e:
+        error_code = e.response["Error"]["Code"]
+
+        if error_code == "404":
+            return {"status": "error", "message": f"File not found: {key}"}
+        else:
+            return {"status": "error", "message": str(e)}

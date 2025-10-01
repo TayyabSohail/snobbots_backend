@@ -1,8 +1,7 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from pydantic import BaseModel
 import json
-import base64
-from app.s3.s3_helper import upload_file_to_s3, list_files_in_s3, get_file_from_s3, generate_presigned_url
+from app.s3.s3_helper import upload_file_to_s3, list_files_in_s3, get_file_from_s3, generate_presigned_url, delete_file_from_s3
 from app.RAG.auth_utils import get_current_user, get_api_key
 
 s3_router = APIRouter(prefix="/s3", tags=["S3"])
@@ -23,6 +22,16 @@ class CrawlRequest(BaseModel):
 class FetchRequest(BaseModel):
     chatbot_title: str
 
+class RemoveRequest(BaseModel):
+    chatbot_title: str
+    filename: str
+
+
+# ------------------------------------------------------------------------------------------- #
+# =========================================================================================== #
+# -------------------------------------- UPLOAD APIs ---------------------------------------- #
+# =========================================================================================== #
+# ------------------------------------------------------------------------------------------- #
 
 # ------------------ FILE UPLOAD ------------------ #
 @s3_router.post("/upload/file")
@@ -162,33 +171,31 @@ async def fetch_files_api(
     request: FetchRequest,
     current_user: dict = Depends(get_current_user),
 ):
-    """
-    Fetch uploaded document files for a chatbot from S3.
-    Returns filename + secure presigned S3 URL (expires in 1 hour).
-    """
     try:
         user_id = current_user["id"]
         chatbot_title = request.chatbot_title.lower()
-        prefix = f"{user_id}/{chatbot_title}/files/"
 
+        # 🔐 Check API key before fetching
+        api_key = get_api_key(user_id, chatbot_title)
+        if not api_key:
+            raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
+
+        prefix = f"{user_id}/{chatbot_title}/files/"
         objects = list_files_in_s3(prefix)
         files = []
 
         for obj in objects:
             key = obj["key"]
-
-            # ✅ Use helper instead of calling s3_client directly
             presigned_url = generate_presigned_url(key, expires_in=3600)
-
             files.append({
                 "filename": key.split("/")[-1],
                 "url": presigned_url
             })
 
         return {"chatbot_title": chatbot_title, "files": files}
-
     except Exception as e:
         raise HTTPException(500, str(e))
+
 
 # ------------------ FETCH RAW TEXTS ------------------ #
 @s3_router.post("/fetch/raw")
@@ -199,12 +206,18 @@ async def fetch_raw_api(
     try:
         user_id = current_user["id"]
         chatbot_title = request.chatbot_title.lower()
-        prefix = f"{user_id}/{chatbot_title}/raw/"
 
+        # 🔐 Check API key before fetching
+        api_key = get_api_key(user_id, chatbot_title)
+        if not api_key:
+            raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
+
+        prefix = f"{user_id}/{chatbot_title}/raw/"
         objects = list_files_in_s3(prefix)
+
         raws = []
         for obj in objects:
-            key = obj["key"]   # ✅ extract string key
+            key = obj["key"]
             content = get_file_from_s3(key).decode("utf-8")
             raws.append({"filename": key.split("/")[-1], "content": content})
 
@@ -222,17 +235,23 @@ async def fetch_qa_api(
     try:
         user_id = current_user["id"]
         chatbot_title = request.chatbot_title.lower()
-        prefix = f"{user_id}/{chatbot_title}/qa/"
 
+        # 🔐 Check API key before fetching
+        api_key = get_api_key(user_id, chatbot_title)
+        if not api_key:
+            raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
+
+        prefix = f"{user_id}/{chatbot_title}/qa/"
         objects = list_files_in_s3(prefix)
+
         qa_files = []
         for obj in objects:
-            key = obj["key"]   # ✅ extract string key
+            key = obj["key"]
             content = get_file_from_s3(key).decode("utf-8")
             try:
                 qa_pairs = json.loads(content)
             except Exception:
-                qa_pairs = []  # fallback
+                qa_pairs = []
             qa_files.append({"filename": key.split("/")[-1], "qa_pairs": qa_pairs})
 
         return {"chatbot_title": chatbot_title, "qa_data": qa_files}
@@ -249,15 +268,127 @@ async def fetch_crawl_api(
     try:
         user_id = current_user["id"]
         chatbot_title = request.chatbot_title.lower()
-        prefix = f"{user_id}/{chatbot_title}/crawls/"
 
+        # 🔐 Check API key before fetching
+        api_key = get_api_key(user_id, chatbot_title)
+        if not api_key:
+            raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
+
+        prefix = f"{user_id}/{chatbot_title}/crawls/"
         objects = list_files_in_s3(prefix)
+
         crawls = []
         for obj in objects:
-            key = obj["key"]   # ✅ extract string key
+            key = obj["key"]
             content = get_file_from_s3(key).decode("utf-8")
             crawls.append({"filename": key.split("/")[-1], "url": content})
 
         return {"chatbot_title": chatbot_title, "crawls": crawls}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    
+# ------------------------------------------------------------------------------------------- #
+# =========================================================================================== #
+# -------------------------------------- REMOVE APIs ---------------------------------------- #
+# =========================================================================================== #
+# ------------------------------------------------------------------------------------------- #
+
+# ------------------ REMOVE FILE ------------------ #
+@s3_router.post("/remove/file")
+async def remove_file_api(
+    request: RemoveRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        user_id = current_user["id"]
+        chatbot_title = request.chatbot_title.lower()
+
+        # 🔐 Check API key before removing
+        api_key = get_api_key(user_id, chatbot_title)
+        if not api_key:
+            raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
+
+        key = f"{user_id}/{chatbot_title}/files/{request.filename}"
+        result = delete_file_from_s3(key)
+
+        if result["status"] == "error":
+            raise HTTPException(404, result["message"])
+
+        return {"success": True, "removed_file": request.filename}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+# ------------------ REMOVE RAW ------------------ #
+@s3_router.post("/remove/raw")
+async def remove_raw_api(
+    request: RemoveRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        user_id = current_user["id"]
+        chatbot_title = request.chatbot_title.lower()
+
+        api_key = get_api_key(user_id, chatbot_title)
+        if not api_key:
+            raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
+
+        key = f"{user_id}/{chatbot_title}/raw/{request.filename}"
+        result = delete_file_from_s3(key)
+
+        if result["status"] == "error":
+            raise HTTPException(404, result["message"])
+
+        return {"success": True, "removed_file": request.filename}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+# ------------------ REMOVE QA ------------------ #
+@s3_router.post("/remove/qa")
+async def remove_qa_api(
+    request: RemoveRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        user_id = current_user["id"]
+        chatbot_title = request.chatbot_title.lower()
+
+        api_key = get_api_key(user_id, chatbot_title)
+        if not api_key:
+            raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
+
+        key = f"{user_id}/{chatbot_title}/qa/{request.filename}"
+        result = delete_file_from_s3(key)
+
+        if result["status"] == "error":
+            raise HTTPException(404, result["message"])
+
+        return {"success": True, "removed_file": request.filename}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+# ------------------ REMOVE CRAWL ------------------ #
+@s3_router.post("/remove/crawl")
+async def remove_crawl_api(
+    request: RemoveRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        user_id = current_user["id"]
+        chatbot_title = request.chatbot_title.lower()
+
+        api_key = get_api_key(user_id, chatbot_title)
+        if not api_key:
+            raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
+
+        key = f"{user_id}/{chatbot_title}/crawls/{request.filename}"
+        result = delete_file_from_s3(key)
+
+        if result["status"] == "error":
+            raise HTTPException(404, result["message"])
+
+        return {"success": True, "removed_file": request.filename}
     except Exception as e:
         raise HTTPException(500, str(e))
