@@ -14,6 +14,7 @@ from app.RAG.pdf_processor import process_and_index_data
 from app.RAG.auth_utils import get_current_user, validate_api_key, get_api_key
 from app.RAG.link_finder import get_internal_links
 from app.RAG.enums import Theme, Position
+from app.RAG.token_tracker import update_tokens, get_user_total_tokens
 
 rag_router = APIRouter(prefix="/rag", tags=["RAG"])
 
@@ -125,6 +126,21 @@ def create_chatbot_api(
                 "category": existing.data[0].get("category"),
                 "description": existing.data[0].get("description")
             }
+
+        # Check if user already has 5 bots (allow 1-5, block at 6+)
+        all_user_bots = (
+            supabase.table("chatbot_configs")
+            .select("chatbot_title")
+            .eq("user_id", user_id)
+            .execute()
+        )
+
+        current_bot_count = len(all_user_bots.data)
+        if current_bot_count >= 5:
+            raise HTTPException(
+                status_code=403,
+                detail=f"You already have {current_bot_count} chatbots. Maximum limit is 5. Please delete a chatbot before creating a new one."
+            )
 
         api_key = "snb_" + "".join(
             secrets.choice(string.ascii_letters + string.digits) for _ in range(32)
@@ -486,6 +502,14 @@ def docs_file(
         chatbot_title=chatbot_title,
     )
 
+    # Save tokens to database (we already have the value from result)
+    update_tokens(
+        user_id=user_id,
+        chatbot_title=chatbot_title,
+        operation_type="file_upload",
+        tokens_used=result["tokens_used"]
+    )
+
     return {
         "message": f"File '{filename}' processed successfully",
         "chunks_indexed": result["chunks_indexed"],
@@ -510,6 +534,14 @@ def upload_raw_text(request: RawTextRequest, current_user: dict = Depends(get_cu
         chatbot_title=chatbot_title,
     )
 
+    # Save tokens to database (we already have the value from result)
+    update_tokens(
+        user_id=user_id,
+        chatbot_title=chatbot_title,
+        operation_type="raw_text",
+        tokens_used=result["tokens_used"]
+    )
+
     return result
 
 
@@ -529,6 +561,14 @@ def upload_qa_pairs(request: QARequest, current_user: dict = Depends(get_current
         user_id=user_id,
         qa_json=qa_data,
         chatbot_title=chatbot_title,
+    )
+
+    # Save tokens to database (we already have the value from result)
+    update_tokens(
+        user_id=user_id,
+        chatbot_title=chatbot_title,
+        operation_type="qa_pairs",
+        tokens_used=result["tokens_used"]
     )
 
     return result
@@ -603,6 +643,14 @@ def fetch_and_index(
             source_type="web_crawling",
             chatbot_title=chatbot_title,
         )
+        # Save tokens to database (we already have the value from result)
+        update_tokens(
+            user_id=user_id,
+            chatbot_title=chatbot_title,
+            operation_type="web_crawl",
+            tokens_used=result["tokens_used"]
+        )
+        
         results.append({
             "heading": block["heading"],
             "preview": combined_text[:120],
@@ -633,16 +681,35 @@ async def ask(request: QueryRequest):
     # Call rag_helper
     full_text, usage = generate_response(request.query, user_id, chatbot_title)
 
-    # compute cost
-    prompt_tokens = usage.get("prompt_tokens", 0)
-    completion_tokens = usage.get("completion_tokens", 0)
-    total_tokens = usage.get("total_tokens", prompt_tokens + completion_tokens)
+    # We already have the token values from the LLM response
+    total_tokens = usage.get("total_tokens", 0)
 
+    # Save tokens to database (we already have the value from usage)
+    update_tokens(
+        user_id=user_id,
+        chatbot_title=chatbot_title,
+        operation_type="ask_query",
+        tokens_used=total_tokens
+    )
 
     return JSONResponse({
         "answer": full_text,
         "tokens_used": total_tokens,
     })
+
+
+# ------------------ TOKEN TRACKING ------------------ #
+
+@rag_router.get("/tokens")
+def get_all_user_tokens(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
+    
+    summary = get_user_total_tokens(user_id)
+    
+    if "error" in summary:
+        raise HTTPException(status_code=500, detail=summary["error"])
+    
+    return summary
 
 
 # ------------------ FLUSH ------------------ #
