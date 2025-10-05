@@ -9,16 +9,15 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 
 
-def generate_response(query: str, user_id: str,chatbot_title:str):
-    """Search Pinecone (user-specific index) and stream AI response with context."""
+def generate_response(query: str, user_id: str, chatbot_title: str):
+    """Search Pinecone (user-specific index) and return AI response with context and usage."""
 
     # Build index name per user
     index_name = f"snobbots-{user_id.lower().replace(' ', '_')}"
 
     # ✅ Check if index exists
     if index_name not in pc.list_indexes().names():
-        yield f"⚠️ No knowledge base found for user `{user_id}`. Please upload documents first."
-        return
+        return f"⚠️ No knowledge base found. Please upload documents first.", {"total_tokens": 0, "prompt_tokens": 0, "completion_tokens": 0}
 
     index = pc.Index(index_name)
     
@@ -54,13 +53,17 @@ Question:
 
 Answer:"""
 
-    # Stream LLM response
-    stream = client.chat.completions.create(
+    # Get LLM response (non-streaming to get usage info)
+    response = client.chat.completions.create(
         model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        stream=True
+        messages=[{"role": "user", "content": prompt}]
     )
 
-    for chunk in stream:
-        if chunk.choices[0].delta.content:
-            yield chunk.choices[0].delta.content
+    full_text = response.choices[0].message.content
+    usage = {
+        "prompt_tokens": response.usage.prompt_tokens,
+        "completion_tokens": response.usage.completion_tokens,
+        "total_tokens": response.usage.total_tokens
+    }
+
+    return full_text, usage
