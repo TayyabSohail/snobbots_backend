@@ -745,3 +745,53 @@ def flush_namespace(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Flush failed: {str(e)}")
+    
+
+# ------------------ Get All Chatbots ------------------ #
+
+@rag_router.get("/all-chatbots")
+def get_user_chatbots(current_user: dict = Depends(get_current_user)):
+    """Get all chatbots of the current user with their details and total count."""
+    user_id = current_user["id"]
+
+    try:
+        from app.supabase import get_admin_supabase_client
+        supabase = get_admin_supabase_client()
+
+        # Fetch all chatbots for this user
+        chatbots = (
+            supabase.table("chatbot_configs")
+            .select("chatbot_title, api_key, is_active, category, description, created_at, updated_at")
+            .eq("user_id", user_id)
+            .execute()
+        )
+
+        if not chatbots.data:
+            return {
+                "total_count": 0,
+                "chatbots": []
+            }
+
+        # Optionally, fetch token usage summary for each bot
+        from app.RAG.token_tracker import get_user_total_tokens
+        token_summary = get_user_total_tokens(user_id)
+        token_data = token_summary.get("details", []) if isinstance(token_summary, dict) else []
+
+        # Map chatbot_title → total_tokens_used
+        token_map = {item["chatbot_title"]: item["total_tokens"] for item in token_data}
+
+        # Attach token count per bot
+        chatbot_list = []
+        for bot in chatbots.data:
+            chatbot_list.append({
+                **bot,
+                "total_tokens_used": token_map.get(bot["chatbot_title"], 0)
+            })
+
+        return {
+            "total_count": len(chatbot_list),
+            "chatbots": chatbot_list
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch chatbots: {str(e)}")
