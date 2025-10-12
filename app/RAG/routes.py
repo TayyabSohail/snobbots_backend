@@ -30,6 +30,7 @@ class CreateChatbotRequest(BaseModel):
 class CreateChatbotRequest(BaseModel):
     chatbot_title: str
     category: str = Field(..., min_length=1, max_length=100)
+    language: Optional[str] = None
     description: Optional[str] = None
 
 
@@ -99,35 +100,53 @@ class FlushRequest(BaseModel):
 # ------------------ CREATE CHATBOT ------------------ #
 
 @rag_router.post("/create-chatbot")
-def create_chatbot_api(
-    request: CreateChatbotRequest,
+async def create_chatbot_api(
+    chatbot_title: str = Form(...),
+    category: str = Form(...),
+    description: Optional[str] = Form(None),
+    language: Optional[str] = Form(None),
+    avatar: Optional[UploadFile] = File(None),
     current_user: dict = Depends(get_current_user),
 ):
     """Create (or return existing) API key for a chatbot with category and description."""
     user_id = current_user["id"]
-    chatbot_title = request.chatbot_title.lower()
+    chatbot_title_lower = chatbot_title.lower()
 
     try:
         from app.supabase import get_admin_supabase_client
         supabase = get_admin_supabase_client()
 
-        existing = (
+        # Check if chatbot config exists
+        existing_config = (
             supabase.table("chatbot_configs")
             .select("api_key, category, description")
             .eq("user_id", user_id)
-            .eq("chatbot_title", chatbot_title)
+            .eq("chatbot_title", chatbot_title_lower)
             .execute()
         )
 
-        if existing.data:
+        if existing_config.data:
+            # If config exists, fetch appearance data and return
+            appearance_data = (
+                supabase.table("chatbot_appearance")
+                .select("language, bot_avatar_url")
+                .eq("user_id", user_id)
+                .eq("chatbot_title", chatbot_title_lower)
+                .execute()
+            )
+            
+            appearance = appearance_data.data[0] if appearance_data.data else {}
+
             return {
-                "api_key": existing.data[0]["api_key"], 
+                "api_key": existing_config.data[0]["api_key"],
                 "message": "API key already exists",
-                "category": existing.data[0].get("category"),
-                "description": existing.data[0].get("description")
+                "category": existing_config.data[0].get("category"),
+                "description": existing_config.data[0].get("description"),
+                "language": appearance.get("language"),
+                "bot_avatar_url": appearance.get("bot_avatar_url"),
             }
 
-        # Check if user already has 5 bots (allow 1-5, block at 6+)
+        # Check if user already has 5 bots
         all_user_bots = (
             supabase.table("chatbot_configs")
             .select("chatbot_title")
@@ -146,20 +165,48 @@ def create_chatbot_api(
             secrets.choice(string.ascii_letters + string.digits) for _ in range(32)
         )
 
-        supabase.table("chatbot_configs").insert({
+        # Handle avatar upload
+        bot_avatar_url = None
+        if avatar:
+            if not avatar.content_type.startswith('image/'):
+                raise HTTPException(status_code=400, detail="Avatar must be an image file")
+            
+            file_content = await avatar.read()
+            if len(file_content) > 2 * 1024 * 1024:  # 2MB limit
+                raise HTTPException(status_code=400, detail="Avatar file too large. Maximum size is 2MB.")
+            
+            import base64
+            file_extension = avatar.filename.split('.')[-1] if '.' in avatar.filename else 'png'
+            base64_data = base64.b64encode(file_content).decode('utf-8')
+            bot_avatar_url = f"data:image/{file_extension};base64,{base64_data}"
+
+        # Insert into chatbot_configs
+        config_data = {
             "user_id": user_id,
-            "chatbot_title": chatbot_title,
+            "chatbot_title": chatbot_title_lower,
             "api_key": api_key,
             "is_active": True,
-            "category": request.category,
-            "description": request.description,
-        }).execute()
+            "category": category,
+            "description": description,
+        }
+        supabase.table("chatbot_configs").insert(config_data).execute()
+
+        # Insert into chatbot_appearance
+        appearance_data = {
+            "user_id": user_id,
+            "chatbot_title": chatbot_title_lower,
+            "language": language,
+            "bot_avatar_url": bot_avatar_url,
+        }
+        supabase.table("chatbot_appearance").insert(appearance_data).execute()
 
         return {
-            "api_key": api_key, 
+            "api_key": api_key,
             "message": "API key created successfully",
-            "category": request.category,
-            "description": request.description
+            "category": category,
+            "description": description,
+            "language": language,
+            "bot_avatar_url": bot_avatar_url,
         }
 
     except Exception as e:
@@ -238,14 +285,13 @@ def update_chatbot_api(
 @rag_router.post("/create-appearance")
 async def create_appearance(
     chatbot_title: str = Form(...),
-    avatar: Optional[UploadFile] = File(None),
     theme: Optional[Theme] = Form(None),
     primary_color_rgb: Optional[str] = Form(None),
     border_radius_px: Optional[int] = Form(None),
     position: Optional[Position] = Form(None),
     current_user: dict = Depends(get_current_user),
 ):
-    """Create chatbot appearance settings."""
+    """Sets non-avatar appearance settings. If settings exist, they are updated. If not, they are created."""
     user_id = current_user["id"]
     chatbot_title = chatbot_title.lower()
 
@@ -253,81 +299,48 @@ async def create_appearance(
         from app.supabase import get_admin_supabase_client
         supabase = get_admin_supabase_client()
 
-        # Check if chatbot exists
-        chatbot_exists = (
-            supabase.table("chatbot_configs")
-            .select("id")
-            .eq("user_id", user_id)
-            .eq("chatbot_title", chatbot_title)
-            .execute()
-        )
-
+        # Check if chatbot config exists first
+        chatbot_exists = supabase.table("chatbot_configs").select("id").eq("user_id", user_id).eq("chatbot_title", chatbot_title).execute()
         if not chatbot_exists.data:
             raise HTTPException(status_code=404, detail="Chatbot not found")
 
-        # Check if appearance already exists
-        existing = (
-            supabase.table("chatbot_appearance")
-            .select("id")
-            .eq("user_id", user_id)
-            .eq("chatbot_title", chatbot_title)
-            .execute()
-        )
-
-        if existing.data:
-            raise HTTPException(status_code=409, detail="Appearance settings already exist. Use update-appearance instead.")
-
-        # Handle avatar upload if provided
-        bot_avatar_url = None
-        if avatar:
-            # Validate file type
-            if not avatar.content_type.startswith('image/'):
-                raise HTTPException(status_code=400, detail="Avatar must be an image file")
-            
-            # Validate file size (max 2MB)
-            file_content = await avatar.read()
-            if len(file_content) > 2 * 1024 * 1024:  # 2MB limit
-                raise HTTPException(status_code=400, detail="Avatar file too large. Maximum size is 2MB.")
-            
-            # Convert to base64 and store in database
-            import base64
-            file_extension = avatar.filename.split('.')[-1] if '.' in avatar.filename else 'png'
-            base64_data = base64.b64encode(file_content).decode('utf-8')
-            bot_avatar_url = f"data:image/{file_extension};base64,{base64_data}"
-
-        # Prepare appearance data
-        appearance_data = {
-            "user_id": user_id,
-            "chatbot_title": chatbot_title,
-        }
-        
-        if bot_avatar_url is not None:
-            appearance_data["bot_avatar_url"] = bot_avatar_url
+        # Prepare data for update/insert
+        update_data = {}
         if theme is not None:
-            appearance_data["theme"] = theme.value
+            update_data["theme"] = theme.value
         if primary_color_rgb is not None:
-            appearance_data["primary_color_rgb"] = primary_color_rgb
+            update_data["primary_color_rgb"] = primary_color_rgb
         if border_radius_px is not None:
-            appearance_data["border_radius_px"] = border_radius_px
+            update_data["border_radius_px"] = border_radius_px
         if position is not None:
-            appearance_data["position"] = position.value
+            update_data["position"] = position.value
 
-        # Create new appearance
-        result = (
-            supabase.table("chatbot_appearance")
-            .insert(appearance_data)
-            .execute()
-        )
+        if not update_data:
+            raise HTTPException(status_code=400, detail="No fields to update")
+
+        # Check if appearance record exists
+        existing_appearance = supabase.table("chatbot_appearance").select("id").eq("user_id", user_id).eq("chatbot_title", chatbot_title).execute()
+
+        if existing_appearance.data:
+            # Update existing appearance record
+            (supabase.table("chatbot_appearance").update(update_data).eq("user_id", user_id).eq("chatbot_title", chatbot_title).execute())
+            message = "Appearance settings updated successfully."
+        else:
+            # This case is for older bots made before the logic change
+            update_data["user_id"] = user_id
+            update_data["chatbot_title"] = chatbot_title
+            (supabase.table("chatbot_appearance").insert(update_data).execute())
+            message = "Appearance settings created successfully."
 
         return {
-            "message": "Appearance created successfully",
-            "appearance_data": appearance_data
+            "message": message,
+            "updated_fields": list(update_data.keys())
         }
 
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Appearance creation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Appearance update failed: {str(e)}")
 
 
 @rag_router.put("/update-appearance")
@@ -759,34 +772,47 @@ def get_user_chatbots(current_user: dict = Depends(get_current_user)):
         supabase = get_admin_supabase_client()
 
         # Fetch all chatbots for this user
-        chatbots = (
+        chatbots_response = (
             supabase.table("chatbot_configs")
             .select("chatbot_title, api_key, is_active, category, description, created_at, updated_at")
             .eq("user_id", user_id)
             .execute()
         )
+        
+        chatbots_data = chatbots_response.data
 
-        if not chatbots.data:
-            return {
-                "total_count": 0,
-                "chatbots": []
-            }
+        if not chatbots_data:
+            return {"total_count": 0, "chatbots": []}
+
+        chatbot_titles = [bot["chatbot_title"] for bot in chatbots_data]
+
+        # Fetch appearance data for all chatbots
+        appearance_response = (
+            supabase.table("chatbot_appearance")
+            .select("chatbot_title, language, bot_avatar_url")
+            .in_("chatbot_title", chatbot_titles)
+            .eq("user_id", user_id)
+            .execute()
+        )
+        
+        appearance_map = {item["chatbot_title"]: item for item in appearance_response.data}
 
         # Optionally, fetch token usage summary for each bot
         from app.RAG.token_tracker import get_user_total_tokens
         token_summary = get_user_total_tokens(user_id)
-        token_data = token_summary.get("details", []) if isinstance(token_summary, dict) else []
+        token_data = token_summary.get("bots", {})
+        token_map = {bot_title: details["total"] for bot_title, details in token_data.items()}
 
-        # Map chatbot_title → total_tokens_used
-        token_map = {item["chatbot_title"]: item["total_tokens"] for item in token_data}
-
-        # Attach token count per bot
+        # Attach token count and appearance data per bot
         chatbot_list = []
-        for bot in chatbots.data:
-            chatbot_list.append({
-                **bot,
-                "total_tokens_used": token_map.get(bot["chatbot_title"], 0)
-            })
+        for bot in chatbots_data:
+            appearance = appearance_map.get(bot["chatbot_title"], {})
+            
+            bot["language"] = appearance.get("language")
+            bot["bot_avatar_url"] = appearance.get("bot_avatar_url")
+            bot["total_tokens_used"] = token_map.get(bot["chatbot_title"], 0)
+            
+            chatbot_list.append(bot)
 
         return {
             "total_count": len(chatbot_list),
