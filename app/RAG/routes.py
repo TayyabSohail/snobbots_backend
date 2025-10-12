@@ -761,10 +761,9 @@ def flush_namespace(
     
 
 # ------------------ Get All Chatbots ------------------ #
-
 @rag_router.get("/all-chatbots")
 def get_user_chatbots(current_user: dict = Depends(get_current_user)):
-    """Get all chatbots of the current user with their details and total count."""
+    """Get all chatbots of the current user with their details, token usage, and query counts."""
     user_id = current_user["id"]
 
     try:
@@ -782,7 +781,11 @@ def get_user_chatbots(current_user: dict = Depends(get_current_user)):
         chatbots_data = chatbots_response.data
 
         if not chatbots_data:
-            return {"total_count": 0, "chatbots": []}
+            return {
+                "total_count": 0,
+                "total_queries_all_bots": 0,
+                "chatbots": []
+            }
 
         chatbot_titles = [bot["chatbot_title"] for bot in chatbots_data]
 
@@ -797,25 +800,37 @@ def get_user_chatbots(current_user: dict = Depends(get_current_user)):
         
         appearance_map = {item["chatbot_title"]: item for item in appearance_response.data}
 
-        # Optionally, fetch token usage summary for each bot
+        # Fetch token usage and query count summary for each bot
         from app.RAG.token_tracker import get_user_total_tokens
         token_summary = get_user_total_tokens(user_id)
-        token_data = token_summary.get("bots", {})
-        token_map = {bot_title: details["total"] for bot_title, details in token_data.items()}
+        
+        if "error" in token_summary:
+            # If there's an error fetching token data, proceed without it
+            token_data = {}
+            total_queries_all_bots = 0
+        else:
+            token_data = token_summary.get("bots", {})
+            total_queries_all_bots = token_summary.get("total_queries_all_bots", 0)
 
-        # Attach token count and appearance data per bot
+        # Attach token count, query count, and appearance data per bot
         chatbot_list = []
         for bot in chatbots_data:
-            appearance = appearance_map.get(bot["chatbot_title"], {})
+            chatbot_title = bot["chatbot_title"]
+            appearance = appearance_map.get(chatbot_title, {})
+            bot_token_data = token_data.get(chatbot_title, {})
             
-            bot["language"] = appearance.get("language")
-            bot["bot_avatar_url"] = appearance.get("bot_avatar_url")
-            bot["total_tokens_used"] = token_map.get(bot["chatbot_title"], 0)
-            
-            chatbot_list.append(bot)
+            chatbot_list.append({
+                **bot,
+                "language": appearance.get("language"),
+                "bot_avatar_url": appearance.get("bot_avatar_url"),
+                "total_tokens_used": bot_token_data.get("total_tokens", 0),
+                "query_count": bot_token_data.get("query_count", 0),
+                "token_breakdown": bot_token_data.get("operations", {})
+            })
 
         return {
             "total_count": len(chatbot_list),
+            "total_queries_all_bots": total_queries_all_bots,
             "chatbots": chatbot_list
         }
 
