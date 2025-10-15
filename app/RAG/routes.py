@@ -15,8 +15,14 @@ from app.RAG.auth_utils import get_current_user, validate_api_key, get_api_key
 from app.RAG.link_finder import get_internal_links
 from app.RAG.enums import Theme, Position
 from app.RAG.token_tracker import update_tokens, get_user_total_tokens
+import asyncio
+from playwright.sync_api import sync_playwright
+
+import certifi
+import os
 
 rag_router = APIRouter(prefix="/rag", tags=["RAG"])
+os.environ["SSL_CERT_FILE"] = certifi.where()
 
 
 
@@ -598,16 +604,21 @@ def discover_links(request: DiscoverRequest, current_user: dict = Depends(get_cu
     endpoints = get_internal_links(request.url)
     return {"base_url": request.url, "endpoints": endpoints}
 
-
 @rag_router.post("/crawl/fetch")
 def fetch_and_index(
     request: FetchRequest,
     current_user: dict = Depends(get_current_user),
 ):
-    """Fetch a specific endpoint and index its content into RAG pipeline with heading + body grouping."""
+    """
+    Fetch a specific endpoint (JS-rendered) and index its content into RAG pipeline with heading + body grouping.
+    Uses Playwright for dynamic rendering.
+    """
+    os.environ["SSL_CERT_FILE"] = certifi.where()
+
     user_id = current_user["id"]
     chatbot_title = request.chatbot_title.lower()
 
+    # Validate API key
     api_key = get_api_key(user_id, chatbot_title)
     if not api_key:
         raise HTTPException(status_code=403, detail=f"No active API key found for chatbot '{chatbot_title}'")
@@ -615,14 +626,24 @@ def fetch_and_index(
     full_url = urljoin(request.base_url, request.endpoint)
 
     try:
-        response = requests.get(full_url, timeout=10)
-        response.raise_for_status()
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+
+            # ⏳ Navigate and wait for "domcontentloaded" instead of "networkidle"
+            page.goto(full_url, wait_until="domcontentloaded", timeout=90000)
+
+            # 🧠 Wait for main content element (to avoid blank pages)
+            page.wait_for_selector("body", timeout=15000)
+
+            html_content = page.content()
+            browser.close()
+
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to fetch {full_url}: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Failed to fetch or render {full_url}: {str(e)}")
 
-    from app.RAG.pdf_processor import process_and_index_data
-
-    soup = BeautifulSoup(response.text, "html.parser")
+    # 🧩 Parse with BeautifulSoup
+    soup = BeautifulSoup(html_content, "html.parser")
 
     grouped_chunks = []
     current_heading = None
@@ -634,7 +655,10 @@ def fetch_and_index(
             continue
         if el.name in ["h1", "h2", "h3", "h4"]:
             if current_heading or current_block:
-                grouped_chunks.append({"heading": current_heading, "content": " ".join(current_block).strip()})
+                grouped_chunks.append({
+                    "heading": current_heading,
+                    "content": " ".join(current_block).strip()
+                })
                 current_block = []
             current_heading = text
         else:
@@ -656,14 +680,12 @@ def fetch_and_index(
             source_type="web_crawling",
             chatbot_title=chatbot_title,
         )
-        # Save tokens to database (we already have the value from result)
         update_tokens(
             user_id=user_id,
             chatbot_title=chatbot_title,
             operation_type="web_crawl",
             tokens_used=result["tokens_used"]
         )
-        
         results.append({
             "heading": block["heading"],
             "preview": combined_text[:120],
@@ -675,10 +697,8 @@ def fetch_and_index(
         "base_url": request.base_url,
         "endpoint": request.endpoint,
         "blocks_extracted": len(grouped_chunks),
-        "indexed_blocks": results
+        "indexed_blocks": results,
     }
-
-
 # ------------------ ASK ------------------ #
 
 @rag_router.post("/ask")
