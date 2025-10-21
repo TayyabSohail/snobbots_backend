@@ -3,6 +3,8 @@ import os
 import sys
 import logging
 from contextlib import asynccontextmanager
+import subprocess
+import asyncio
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -16,20 +18,18 @@ from app.auth import auth_router
 from app.RAG.routes import rag_router
 from app.s3.routes import s3_router
 from app.helpers.response_helper import error_response
-import subprocess
-import asyncio
 
 
 # ---------------------------
-# PlayWright Installation
+# PlayWright Installation Helper
 # ---------------------------
-async def ensure_chromium_installed():
+def ensure_chromium_installed():
+    """Ensure Chromium is installed for Playwright."""
     try:
         subprocess.run(["playwright", "install", "chromium"], check=True)
+        print("Chromium successfully installed or already available.")
     except subprocess.CalledProcessError:
-        print("Failed to install Chromium during runtime")
-        
-asyncio.run(ensure_chromium_installed())
+        print("Failed to install Chromium during runtime.")
 
 
 # ---------------------------
@@ -38,7 +38,7 @@ asyncio.run(ensure_chromium_installed())
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)]
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger(__name__)
 
@@ -48,11 +48,20 @@ logger = logging.getLogger(__name__)
 # ---------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan events."""
+    """Application startup and shutdown events."""
     logger.info("Starting Snobbots Backend API")
     logger.info(f"Environment: {settings.environment}")
     logger.info(f"Debug mode: {settings.debug}")
-    yield
+
+    # Install Chromium asynchronously in a separate thread
+    try:
+        logger.info("Checking Playwright Chromium installation...")
+        await asyncio.to_thread(ensure_chromium_installed)
+    except Exception as e:
+        logger.warning(f"⚠️ Chromium installation failed: {e}")
+
+    yield  # --- app runs here ---
+
     logger.info("Shutting down Snobbots Backend API")
 
 
@@ -76,13 +85,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # -------------------------
 # Global Exception Handlers
 # -------------------------
-
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """Handles Pydantic validation errors in request body/query/params."""
+    """Handles Pydantic validation errors."""
     return JSONResponse(
         status_code=422,
         content=error_response(
@@ -95,7 +104,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
-    """Handles typical HTTP exceptions (e.g. 404, 401)."""
+    """Handles HTTP exceptions."""
     return JSONResponse(
         status_code=exc.status_code,
         content=error_response(
@@ -107,7 +116,7 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    """Handles all other uncaught exceptions."""
+    """Handles uncaught exceptions."""
     logger.error(f"Unhandled error: {exc}", exc_info=True)
     return JSONResponse(
         status_code=500,
@@ -122,8 +131,9 @@ async def global_exception_handler(request: Request, exc: Exception):
 # Routers
 # ---------------------------
 app.include_router(auth_router, prefix=settings.api_prefix)
-app.include_router(rag_router,prefix=settings.api_prefix)
-app.include_router(s3_router,prefix=settings.api_prefix)
+app.include_router(rag_router, prefix=settings.api_prefix)
+app.include_router(s3_router, prefix=settings.api_prefix)
+
 
 # ---------------------------
 # Root endpoint
