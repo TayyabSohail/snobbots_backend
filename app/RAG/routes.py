@@ -65,6 +65,9 @@ class QueryRequest(BaseModel):
     query: str
     api_key: str
 
+class ApiKeyRequest(BaseModel):
+    api_key: str
+
 class QAPair(BaseModel):
     question: str
     answer: str
@@ -440,14 +443,56 @@ async def update_appearance(
         raise HTTPException(status_code=500, detail=f"Appearance update failed: {str(e)}")
 
 
-@rag_router.get("/appearance/{chatbot_title}")
-def get_appearance(
-    chatbot_title: str,
-    current_user: dict = Depends(get_current_user),
-):
-    """Get current chatbot appearance settings."""
-    user_id = current_user["id"]
-    chatbot_title = chatbot_title.lower()
+# @rag_router.get("/appearance/{chatbot_title}")
+# def get_appearance(
+#     chatbot_title: str,
+#     current_user: dict = Depends(get_current_user),
+# ):
+#     """Get current chatbot appearance settings."""
+#     user_id = current_user["id"]
+#     chatbot_title = chatbot_title.lower()
+
+#     try:
+#         from app.supabase import get_admin_supabase_client
+#         supabase = get_admin_supabase_client()
+
+#         result = (
+#             supabase.table("chatbot_appearance")
+#             .select("*")
+#             .eq("user_id", user_id)
+#             .eq("chatbot_title", chatbot_title)
+#             .execute()
+#         )
+
+#         if not result.data:
+#             # Return default values if no appearance settings exist
+#             return {
+#                 "chatbot_title": chatbot_title,
+#                 "bot_avatar_url": None,
+#                 "theme": None,
+#                 "primary_color_rgb": None,
+#                 "border_radius_px": None,
+#                 "position": None,
+#                 "message": "No appearance settings found - using defaults"
+#             }
+
+#         return AppearanceResponse(**result.data[0])
+
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=f"Failed to fetch appearance: {str(e)}")
+
+
+@rag_router.post("/get-appearance")
+def get_appearance_public(request: ApiKeyRequest):
+    """Get chatbot appearance settings using API key (no authentication required)."""
+    api_data = validate_api_key(request.api_key)
+    if not api_data:
+        raise HTTPException(status_code=401, detail="Invalid or inactive API key")
+
+    user_id = api_data["user_id"]
+    chatbot_title = api_data["chatbot_title"].lower()
 
     try:
         from app.supabase import get_admin_supabase_client
@@ -473,7 +518,8 @@ def get_appearance(
                 "message": "No appearance settings found - using defaults"
             }
 
-        return AppearanceResponse(**result.data[0])
+        # Return all fields from the table
+        return result.data[0]
 
     except HTTPException:
         raise
