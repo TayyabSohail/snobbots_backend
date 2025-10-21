@@ -16,6 +16,21 @@ from app.auth import auth_router
 from app.RAG.routes import rag_router
 from app.s3.routes import s3_router
 from app.helpers.response_helper import error_response
+import subprocess
+import asyncio
+
+
+# ---------------------------
+# PlayWright Installation
+# ---------------------------
+async def ensure_chromium_installed():
+    try:
+        subprocess.run(["playwright", "install", "chromium"], check=True)
+    except subprocess.CalledProcessError:
+        print("Failed to install Chromium during runtime")
+        
+asyncio.run(ensure_chromium_installed())
+
 
 # ---------------------------
 # Logging Configuration
