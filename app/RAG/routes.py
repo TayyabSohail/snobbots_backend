@@ -15,8 +15,20 @@ from app.RAG.auth_utils import get_current_user, validate_api_key, get_api_key
 from app.RAG.link_finder import get_internal_links
 from app.RAG.enums import Theme, Position
 from app.RAG.token_tracker import update_tokens, get_user_total_tokens
+import asyncio
+from playwright.sync_api import sync_playwright
+from playwright.async_api import async_playwright
+
+
+import certifi
+import os
+
+_browser = None
+_playwright = None
+
 
 rag_router = APIRouter(prefix="/rag", tags=["RAG"])
+os.environ["SSL_CERT_FILE"] = certifi.where()
 
 
 
@@ -599,31 +611,68 @@ def discover_links(request: DiscoverRequest, current_user: dict = Depends(get_cu
     return {"base_url": request.url, "endpoints": endpoints}
 
 
+
+@rag_router.on_event("startup")
+async def startup_event():
+    """Launch a single global Playwright browser asynchronously."""
+    global _playwright, _browser
+    os.environ["SSL_CERT_FILE"] = certifi.where()
+    _playwright = await async_playwright().start()
+    _browser = await _playwright.chromium.launch(headless=True)
+    print("✅ Playwright browser started globally.")
+
+
+@rag_router.on_event("shutdown")
+async def shutdown_event():
+    """Close the global browser on app shutdown."""
+    global _playwright, _browser
+    if _browser:
+        await _browser.close()
+    if _playwright:
+        await _playwright.stop()
+    print("🧹 Playwright browser closed.")
+
+
 @rag_router.post("/crawl/fetch")
-def fetch_and_index(
+async def fetch_and_index(
     request: FetchRequest,
     current_user: dict = Depends(get_current_user),
 ):
-    """Fetch a specific endpoint and index its content into RAG pipeline with heading + body grouping."""
+    """
+    Fetch a JS-rendered webpage using global async Playwright instance
+    → Extract structured text
+    → Batch embed + index once (optimized for performance)
+    """
+    global _browser
+    if not _browser:
+        raise HTTPException(status_code=500, detail="Playwright browser not initialized.")
+
+    os.environ["SSL_CERT_FILE"] = certifi.where()
+
     user_id = current_user["id"]
     chatbot_title = request.chatbot_title.lower()
 
+    # ✅ Validate API key
     api_key = get_api_key(user_id, chatbot_title)
     if not api_key:
-        raise HTTPException(status_code=403, detail=f"No active API key found for chatbot '{chatbot_title}'")
+        raise HTTPException(
+            status_code=403,
+            detail=f"No active API key found for chatbot '{chatbot_title}'"
+        )
 
     full_url = urljoin(request.base_url, request.endpoint)
 
     try:
-        response = requests.get(full_url, timeout=10)
-        response.raise_for_status()
+        page = await _browser.new_page()
+        await page.goto(full_url, wait_until="domcontentloaded", timeout=90000)
+        await page.wait_for_selector("body", timeout=15000)
+        html_content = await page.content()
+        await page.close()
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to fetch {full_url}: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Failed to fetch or render {full_url}: {str(e)}")
 
-    from app.RAG.pdf_processor import process_and_index_data
-
-    soup = BeautifulSoup(response.text, "html.parser")
-
+    # 🧩 Parse with BeautifulSoup
+    soup = BeautifulSoup(html_content, "html.parser")
     grouped_chunks = []
     current_heading = None
     current_block = []
@@ -634,51 +683,69 @@ def fetch_and_index(
             continue
         if el.name in ["h1", "h2", "h3", "h4"]:
             if current_heading or current_block:
-                grouped_chunks.append({"heading": current_heading, "content": " ".join(current_block).strip()})
+                grouped_chunks.append({
+                    "heading": current_heading,
+                    "content": " ".join(current_block).strip()
+                })
                 current_block = []
             current_heading = text
         else:
             current_block.append(text)
 
     if current_heading or current_block:
-        grouped_chunks.append({"heading": current_heading, "content": " ".join(current_block).strip()})
+        grouped_chunks.append({
+            "heading": current_heading,
+            "content": " ".join(current_block).strip()
+        })
 
     if not grouped_chunks:
         raise HTTPException(status_code=400, detail=f"No meaningful structured text found on {full_url}")
 
-    results = []
+    # ✅ Combine all chunks before embedding/indexing
+    texts_to_index = []
+    previews = []
+
     for block in grouped_chunks:
-        combined_text = f"{block['heading']}\n{block['content']}" if block["heading"] else block["content"]
+        combined_text = (
+            f"{block['heading']}\n{block['content']}" if block["heading"] else block["content"]
+        )
+        texts_to_index.append(combined_text)
+        previews.append({
+            "heading": block["heading"],
+            "preview": combined_text[:120],
+        })
+
+    # ✅ Single embedding/indexing call for all chunks
+    try:
         result = process_and_index_data(
             user_id=user_id,
-            raw_text=combined_text,
+            raw_text="\n\n".join(texts_to_index),
             filename=request.endpoint.strip("/"),
             source_type="web_crawling",
             chatbot_title=chatbot_title,
         )
-        # Save tokens to database (we already have the value from result)
+
         update_tokens(
             user_id=user_id,
             chatbot_title=chatbot_title,
             operation_type="web_crawl",
             tokens_used=result["tokens_used"]
         )
-        
-        results.append({
-            "heading": block["heading"],
-            "preview": combined_text[:120],
-            "chunks_indexed": result["chunks_indexed"],
-            "tokens_used": result["tokens_used"],
-        })
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Indexing failed: {str(e)}")
 
     return {
         "base_url": request.base_url,
         "endpoint": request.endpoint,
         "blocks_extracted": len(grouped_chunks),
-        "indexed_blocks": results
+        "chunks_indexed": result["chunks_indexed"],
+        "tokens_used": result["tokens_used"],
+        "indexed_blocks": previews,
+        "message": "✅ Crawled and indexed successfully in a single pass.",
     }
-
-
+    
+    
 # ------------------ ASK ------------------ #
 
 @rag_router.post("/ask")
