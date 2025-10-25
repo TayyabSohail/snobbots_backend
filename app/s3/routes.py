@@ -17,7 +17,7 @@ class QARequest(BaseModel):
 
 class CrawlRequest(BaseModel):
     chatbot_title: str
-    url: str
+    urls: list[str]  # Changed from single url to list of urls
     
 class FetchRequest(BaseModel):
     chatbot_title: str
@@ -142,9 +142,12 @@ async def upload_crawl_to_s3_api(
         if not api_key:
             raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
 
+        # Create content with all URLs (one per line)
+        content = "\n".join(request.urls)
+        file_bytes = content.encode("utf-8")
+        
         s3_key = f"{user_id}/{chatbot_title}/crawls/{chatbot_title}.txt"
-        file_bytes = request.url.encode("utf-8")
-
+        
         result = upload_file_to_s3(file_bytes, s3_key, "text/plain")
         if result["status"] == "error":
             raise HTTPException(500, result["message"])
@@ -153,7 +156,7 @@ async def upload_crawl_to_s3_api(
             "url": result["url"],
             "chatbot_title": chatbot_title,
             "uploaded_by": user_id,
-            "saved_url": request.url,
+            "saved_urls": request.urls,  # Return all URLs
             "source": "web_crawling"
         }
     except Exception as e:
@@ -274,16 +277,24 @@ async def fetch_crawl_api(
         if not api_key:
             raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
 
-        prefix = f"{user_id}/{chatbot_title}/crawls/"
-        objects = list_files_in_s3(prefix)
+        s3_key = f"{user_id}/{chatbot_title}/crawls/{chatbot_title}.txt"
+        content = get_file_from_s3(s3_key).decode("utf-8")
+        
+        # Split by newlines to get individual URLs
+        urls = [url.strip() for url in content.split('\n') if url.strip()]
 
+        # Format URLs to match the expected API documentation
         crawls = []
-        for obj in objects:
-            key = obj["key"]
-            content = get_file_from_s3(key).decode("utf-8")
-            crawls.append({"filename": key.split("/")[-1], "url": content})
+        for url in urls:
+            crawls.append({
+                "filename": f"{chatbot_title}.txt",
+                "url": url
+            })
 
-        return {"chatbot_title": chatbot_title, "crawls": crawls}
+        return {
+            "chatbot_title": chatbot_title,
+            "crawls": crawls
+        }
     except Exception as e:
         raise HTTPException(500, str(e))
     
