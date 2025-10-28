@@ -1,8 +1,22 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from pydantic import BaseModel
 import json
-from app.s3.s3_helper import upload_file_to_s3, list_files_in_s3, get_file_from_s3, generate_presigned_url, delete_file_from_s3
+from typing import List, Dict, Any
+
+from app.s3.s3_helper import (
+    upload_file_to_s3,
+    list_files_in_s3,
+    get_file_from_s3,
+    generate_presigned_url,
+    delete_file_from_s3,
+)
 from app.RAG.auth_utils import get_current_user, get_api_key
+
+# Internal RAG imports (internal calls, Option 1)
+from app.RAG.pdf_processor import process_and_index_data
+from app.RAG.token_tracker import update_tokens
+from app.RAG import routes as rag_routes  # to call fetch_and_index internally (async)
+# NOTE: rag_routes.fetch_and_index is async; we'll await it in crawl flow below
 
 s3_router = APIRouter(prefix="/s3", tags=["S3"])
 
@@ -13,12 +27,12 @@ class RawTextRequest(BaseModel):
 
 class QARequest(BaseModel):
     chatbot_title: str
-    qa_pairs: list[dict]  # [{"question": "...", "answer": "..."}]
+    qa_pairs: List[Dict[str, str]]  # [{"question": "...", "answer": "..."}]
 
 class CrawlRequest(BaseModel):
     chatbot_title: str
-    urls: list[str]  # Changed from single url to list of urls
-    
+    urls: List[str]  # list of urls
+
 class FetchRequest(BaseModel):
     chatbot_title: str
 
@@ -40,6 +54,10 @@ async def upload_file_to_s3_api(
     chatbot_title: str = Form(...),
     current_user: dict = Depends(get_current_user),
 ):
+    """
+    Upload file to S3 and then index it via internal RAG call (process_and_index_data).
+    Returns upload metadata + indexing result (if indexing succeeded/failed).
+    """
     try:
         user_id = current_user["id"]
         chatbot_title = chatbot_title.lower()
@@ -55,13 +73,50 @@ async def upload_file_to_s3_api(
         if result["status"] == "error":
             raise HTTPException(500, result["message"])
 
+        # --- Call internal indexing (single call for this file) ---
+        indexing_result = None
+        indexing_errors = None
+        try:
+            proc_result = process_and_index_data(
+                user_id=user_id,
+                filename=file.filename,
+                file_bytes=file_bytes,
+                chatbot_title=chatbot_title,
+            )
+
+            # update token tracker
+            try:
+                update_tokens(
+                    user_id=user_id,
+                    chatbot_title=chatbot_title,
+                    operation_type="file_upload",
+                    tokens_used=proc_result.get("tokens_used", 0),
+                )
+            except Exception:
+                # non-fatal if token update fails
+                pass
+
+            indexing_result = {
+                "chunks_indexed": proc_result.get("chunks_indexed"),
+                "tokens_used": proc_result.get("tokens_used"),
+            }
+
+        except Exception as e:
+            indexing_errors = str(e)
+
         return {
             "url": result["url"],
             "filename": file.filename,
             "uploaded_by": user_id,
             "chatbot_title": chatbot_title,
-            "source": "file"
+            "source": "file",
+            "indexing": {
+                "result": indexing_result,
+                "error": indexing_errors,
+            },
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(500, str(e))
 
@@ -72,6 +127,10 @@ async def upload_raw_to_s3_api(
     request: RawTextRequest,
     current_user: dict = Depends(get_current_user),
 ):
+    """
+    Upload raw text to S3 and index it (process_and_index_data).
+    Returns upload metadata + indexing result.
+    """
     try:
         user_id = current_user["id"]
         chatbot_title = request.chatbot_title.lower()
@@ -87,12 +146,45 @@ async def upload_raw_to_s3_api(
         if result["status"] == "error":
             raise HTTPException(500, result["message"])
 
+        # Index the raw text
+        indexing_result = None
+        indexing_errors = None
+        try:
+            proc_result = process_and_index_data(
+                user_id=user_id,
+                raw_text=request.raw_text,
+                chatbot_title=chatbot_title,
+            )
+
+            try:
+                update_tokens(
+                    user_id=user_id,
+                    chatbot_title=chatbot_title,
+                    operation_type="raw_text",
+                    tokens_used=proc_result.get("tokens_used", 0),
+                )
+            except Exception:
+                pass
+
+            indexing_result = {
+                "chunks_indexed": proc_result.get("chunks_indexed"),
+                "tokens_used": proc_result.get("tokens_used"),
+            }
+        except Exception as e:
+            indexing_errors = str(e)
+
         return {
             "url": result["url"],
             "chatbot_title": chatbot_title,
             "uploaded_by": user_id,
-            "source": "raw_text"
+            "source": "raw_text",
+            "indexing": {
+                "result": indexing_result,
+                "error": indexing_errors,
+            },
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(500, str(e))
 
@@ -103,6 +195,10 @@ async def upload_qa_to_s3_api(
     request: QARequest,
     current_user: dict = Depends(get_current_user),
 ):
+    """
+    Upload QA pairs JSON to S3 and index them (process_and_index_data with qa_json).
+    Returns upload metadata + indexing result.
+    """
     try:
         user_id = current_user["id"]
         chatbot_title = request.chatbot_title.lower()
@@ -118,12 +214,45 @@ async def upload_qa_to_s3_api(
         if result["status"] == "error":
             raise HTTPException(500, result["message"])
 
+        # Index QA pairs
+        indexing_result = None
+        indexing_errors = None
+        try:
+            proc_result = process_and_index_data(
+                user_id=user_id,
+                qa_json=request.qa_pairs,
+                chatbot_title=chatbot_title,
+            )
+
+            try:
+                update_tokens(
+                    user_id=user_id,
+                    chatbot_title=chatbot_title,
+                    operation_type="qa_pairs",
+                    tokens_used=proc_result.get("tokens_used", 0),
+                )
+            except Exception:
+                pass
+
+            indexing_result = {
+                "chunks_indexed": proc_result.get("chunks_indexed"),
+                "tokens_used": proc_result.get("tokens_used"),
+            }
+        except Exception as e:
+            indexing_errors = str(e)
+
         return {
             "url": result["url"],
             "chatbot_title": chatbot_title,
             "uploaded_by": user_id,
-            "source": "qa_pairs"
+            "source": "qa_pairs",
+            "indexing": {
+                "result": indexing_result,
+                "error": indexing_errors,
+            },
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(500, str(e))
 
@@ -134,6 +263,10 @@ async def upload_crawl_to_s3_api(
     request: CrawlRequest,
     current_user: dict = Depends(get_current_user),
 ):
+    """
+    Save crawl URLs to S3 and then trigger internal RAG fetch_and_index for each URL.
+    This uses your existing Playwright-based fetch_and_index in app.RAG.routes (internal async call).
+    """
     try:
         user_id = current_user["id"]
         chatbot_title = request.chatbot_title.lower()
@@ -142,26 +275,66 @@ async def upload_crawl_to_s3_api(
         if not api_key:
             raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
 
-        # Create content with all URLs (one per line)
+        # Save the list of URLs as a newline-separated file
         content = "\n".join(request.urls)
         file_bytes = content.encode("utf-8")
-        
+
         s3_key = f"{user_id}/{chatbot_title}/crawls/{chatbot_title}.txt"
-        
+
         result = upload_file_to_s3(file_bytes, s3_key, "text/plain")
         if result["status"] == "error":
             raise HTTPException(500, result["message"])
+
+        # Now call rag_routes.fetch_and_index internally for each URL.
+        indexing_summary = {
+            "success_count": 0,
+            "failed": [],
+            "details": []
+        }
+
+        for url in request.urls:
+            try:
+                # Build a small FetchRequest-like object expected by rag_routes.fetch_and_index
+                # rag_routes.fetch_and_index signature: async def fetch_and_index(request: FetchRequest, current_user: dict)
+                fetch_req = rag_routes.FetchRequest(
+                    base_url=url,
+                    endpoint="",  # treat whole URL as base_url; your fetch implementation should handle it
+                    chatbot_title=chatbot_title,
+                )
+
+                # Call the internal async endpoint directly
+                resp = await rag_routes.fetch_and_index(fetch_req, current_user)
+
+                # Expect the response to be a dict matching your /crawl/fetch returns
+                indexing_summary["success_count"] += 1
+                indexing_summary["details"].append({
+                    "url": url,
+                    "result": resp
+                })
+
+                # Sum tokens if present (update token tracker already done by fetch_and_index internally,
+                # but if you want to be explicit you could update tokens here too. We assume fetch_and_index updates tokens).
+            except Exception as e:
+                indexing_summary["failed"].append({
+                    "url": url,
+                    "error": str(e)
+                })
 
         return {
             "url": result["url"],
             "chatbot_title": chatbot_title,
             "uploaded_by": user_id,
-            "saved_urls": request.urls,  # Return all URLs
-            "source": "web_crawling"
+            "saved_urls": request.urls,
+            "source": "web_crawling",
+            "indexing_summary": indexing_summary
         }
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(500, str(e))
-    
+
+
 # ------------------------------------------------------------------------------------------- #
 # =========================================================================================== #
 # -------------------------------------- FETCH APIs ----------------------------------------- #
