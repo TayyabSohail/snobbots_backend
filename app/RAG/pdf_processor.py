@@ -7,6 +7,8 @@ from openai import OpenAI
 from pinecone import Pinecone, ServerlessSpec
 import json
 import uuid
+import re
+import unicodedata
 
 # Load keys
 load_dotenv()
@@ -18,6 +20,16 @@ pc = Pinecone(api_key=PINECONE_API_KEY)
 
 # OpenAI pricing (as of Sept 2025)
 EMBEDDING_COST_PER_1K = 0.00013  # text-embedding-3-large
+
+
+def sanitize_id(value: str) -> str:
+    """
+    Make a string ASCII-safe for Pinecone vector IDs.
+    Removes or replaces all non-ASCII characters.
+    """
+    value = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
+    value = re.sub(r"[^a-zA-Z0-9._-]", "_", value)
+    return value
 
 
 def process_and_index_data(
@@ -42,7 +54,7 @@ def process_and_index_data(
     """
 
     # Unique index name per user
-    INDEX_NAME = f"snobbots-{user_id.lower().replace(' ', '_')}"
+    INDEX_NAME = f"snobbots-{sanitize_id(user_id.lower().replace(' ', '_'))}"
 
     # Ensure index exists
     if INDEX_NAME not in pc.list_indexes().names():
@@ -56,7 +68,7 @@ def process_and_index_data(
 
     if not chatbot_title:
         raise ValueError("chatbot_title is required to create a namespace")
-    namespace = chatbot_title.strip().lower().replace(" ", "_")
+    namespace = sanitize_id(chatbot_title.strip().lower().replace(" ", "_"))
 
     # Collect chunks with source info
     chunks = []
@@ -134,7 +146,8 @@ def process_and_index_data(
         if hasattr(resp, "usage"):
             total_tokens += resp.usage.total_tokens
 
-        unique_id = f"{user_id}_{chunk['source']}_{i}_{uuid.uuid4().hex[:8]}"
+        safe_source = sanitize_id(chunk["source"])
+        unique_id = sanitize_id(f"{user_id}_{safe_source}_{i}_{uuid.uuid4().hex[:8]}")
 
         vectors.append({
             "id": unique_id,
@@ -146,6 +159,7 @@ def process_and_index_data(
             }
         })
 
+    # ✅ Now safe for Pinecone
     index.upsert(vectors=vectors, namespace=namespace)
 
     return {
