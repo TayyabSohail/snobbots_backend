@@ -1,7 +1,7 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 import json
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, Union
 
 from app.s3.s3_helper import (
     upload_file_to_s3,
@@ -31,7 +31,24 @@ class QARequest(BaseModel):
 
 class CrawlRequest(BaseModel):
     chatbot_title: str
-    urls: List[str]  # list of urls
+    url: Optional[str] = None  # single URL
+    urls: Optional[List[str]] = None  # multiple URLs
+    
+    @model_validator(mode='after')
+    def validate_urls(self):
+        """Validate that exactly one of url or urls is provided."""
+        if self.url is None and self.urls is None:
+            raise ValueError("Either 'url' or 'urls' must be provided")
+        if self.url is not None and self.urls is not None:
+            raise ValueError("Cannot provide both 'url' and 'urls'. Use one or the other.")
+        return self
+    
+    @property
+    def url_list(self) -> List[str]:
+        """Returns a list of URLs, converting single URL to list if needed."""
+        if self.url:
+            return [self.url]
+        return self.urls or []
 
 class FetchRequest(BaseModel):
     chatbot_title: str
@@ -275,8 +292,13 @@ async def upload_crawl_to_s3_api(
         if not api_key:
             raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
 
+        # Get URLs list (handles both single and multiple)
+        urls_list = request.url_list
+        if not urls_list:
+            raise HTTPException(400, "At least one URL must be provided")
+
         # Save the list of URLs as a newline-separated file
-        content = "\n".join(request.urls)
+        content = "\n".join(urls_list)
         file_bytes = content.encode("utf-8")
 
         s3_key = f"{user_id}/{chatbot_title}/crawls/{chatbot_title}.txt"
@@ -292,7 +314,7 @@ async def upload_crawl_to_s3_api(
             "details": []
         }
 
-        for url in request.urls:
+        for url in urls_list:
             try:
                 # Build a small FetchRequest-like object expected by rag_routes.fetch_and_index
                 # rag_routes.fetch_and_index signature: async def fetch_and_index(request: FetchRequest, current_user: dict)
@@ -320,14 +342,22 @@ async def upload_crawl_to_s3_api(
                     "error": str(e)
                 })
 
-        return {
+        # Build response based on single vs multiple URLs
+        response = {
             "url": result["url"],
             "chatbot_title": chatbot_title,
             "uploaded_by": user_id,
-            "saved_urls": request.urls,
             "source": "web_crawling",
             "indexing_summary": indexing_summary
         }
+        
+        # Use saved_url for single, saved_urls for multiple (matching docs)
+        if request.url:
+            response["saved_url"] = request.url
+        else:
+            response["saved_urls"] = request.urls
+        
+        return response
 
     except HTTPException:
         raise
