@@ -685,7 +685,8 @@ async def shutdown_event():
     print("🧹 Playwright browser closed.")
 
 
-@rag_router.post("/crawl/fetch")
+# DEPRECATED: Public endpoint removed - use /s3/upload/crawl instead for batch processing
+# This function is still used internally by /s3/upload/crawl
 async def fetch_and_index(
     request: FetchRequest,
     current_user: dict = Depends(get_current_user),
@@ -694,6 +695,9 @@ async def fetch_and_index(
     Fetch a JS-rendered webpage using global async Playwright instance
     → Extract structured text
     → Batch embed + index once (optimized for performance)
+    
+    NOTE: This is now an internal function used by /s3/upload/crawl.
+    Use /s3/upload/crawl endpoint for crawling multiple URLs.
     """
     global _browser
     if not _browser:
