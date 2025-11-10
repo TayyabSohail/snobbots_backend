@@ -959,3 +959,72 @@ def get_user_chatbots(current_user: dict = Depends(get_current_user)):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch chatbots: {str(e)}")
+
+# ------------------ Get Single Chatbot ------------------ #
+@rag_router.get("/chatbots/{chatbot_title}")
+def get_user_chatbot_details(
+    chatbot_title: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get detailed information for a single chatbot, including appearance and usage data."""
+    user_id = current_user["id"]
+    normalized_title = chatbot_title.strip()
+
+    if not normalized_title:
+        raise HTTPException(status_code=400, detail="chatbot_title cannot be empty")
+
+    try:
+        from app.supabase import get_admin_supabase_client
+        supabase = get_admin_supabase_client()
+
+        # Fetch chatbot config
+        chatbot_response = (
+            supabase.table("chatbot_configs")
+            .select("chatbot_title, api_key, is_active, category, description, created_at, updated_at")
+            .eq("user_id", user_id)
+            .eq("chatbot_title", normalized_title)
+            .single()
+            .execute()
+        )
+
+        chatbot_data = chatbot_response.data
+
+        if not chatbot_data:
+            raise HTTPException(status_code=404, detail=f"Chatbot '{normalized_title}' not found for this user")
+
+        # Fetch appearance data
+        appearance_response = (
+            supabase.table("chatbot_appearance")
+            .select("language, bot_avatar_url")
+            .eq("user_id", user_id)
+            .eq("chatbot_title", normalized_title)
+            .maybe_single()
+            .execute()
+        )
+
+        appearance_data = appearance_response.data or {}
+
+        # Fetch token usage and query count summary for this bot
+        from app.RAG.token_tracker import get_user_total_tokens
+        token_summary = get_user_total_tokens(user_id)
+
+        if "error" in token_summary:
+            token_data = {}
+        else:
+            token_data = token_summary.get("bots", {}).get(normalized_title, {})
+
+        chatbot_details = {
+            **chatbot_data,
+            "language": appearance_data.get("language"),
+            "bot_avatar_url": appearance_data.get("bot_avatar_url"),
+            "total_tokens_used": token_data.get("total_tokens", 0),
+            "query_count": token_data.get("query_count", 0),
+            "token_breakdown": token_data.get("operations", {}),
+        }
+
+        return {"chatbot": chatbot_details}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch chatbot '{normalized_title}': {str(e)}")
