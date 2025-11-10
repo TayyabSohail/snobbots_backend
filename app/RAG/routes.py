@@ -961,14 +961,14 @@ def get_user_chatbots(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=f"Failed to fetch chatbots: {str(e)}")
 
 # ------------------ Get Single Chatbot ------------------ #
-@rag_router.get("/chatbots/{chatbot_title}")
+@rag_router.post("/chatbots/details")
 def get_user_chatbot_details(
-    chatbot_title: str,
+    request: FlushRequest,
     current_user: dict = Depends(get_current_user)
 ):
     """Get detailed information for a single chatbot, including appearance and usage data."""
     user_id = current_user["id"]
-    normalized_title = chatbot_title.strip()
+    normalized_title = request.chatbot_title.strip()
 
     if not normalized_title:
         raise HTTPException(status_code=400, detail="chatbot_title cannot be empty")
