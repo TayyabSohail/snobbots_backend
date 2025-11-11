@@ -296,9 +296,6 @@ def update_chatbot_api(
 
 
 # ------------------ APPEARANCE MANAGEMENT ------------------ #
-# DEPRECATED: /create-appearance merged with /create-chatbot (appearance is created during chatbot creation)
-# DEPRECATED: /update-appearance - no longer needed
-
 # @rag_router.post("/create-appearance")
 # async def create_appearance(
 #     chatbot_title: str = Form(...),
@@ -360,101 +357,107 @@ def update_chatbot_api(
 #         raise HTTPException(status_code=500, detail=f"Appearance update failed: {str(e)}")
 
 
-# @rag_router.put("/update-appearance")
-# async def update_appearance(
-#     chatbot_title: str = Form(...),
-#     avatar: Optional[UploadFile] = File(None),
-#     theme: Optional[Theme] = Form(None),
-#     primary_color_rgb: Optional[str] = Form(None),
-#     border_radius_px: Optional[int] = Form(None),
-#     position: Optional[Position] = Form(None),
-#     current_user: dict = Depends(get_current_user),
-# ):
-#     """Update chatbot appearance settings."""
-#     user_id = current_user["id"]
-#     chatbot_title = chatbot_title.lower()
-#
-#     try:
-#         from app.supabase import get_admin_supabase_client
-#         supabase = get_admin_supabase_client()
-#
-#         # Check if chatbot exists
-#         chatbot_exists = (
-#             supabase.table("chatbot_configs")
-#             .select("id")
-#             .eq("user_id", user_id)
-#             .eq("chatbot_title", chatbot_title)
-#             .execute()
-#         )
-#
-#         if not chatbot_exists.data:
-#             raise HTTPException(status_code=404, detail="Chatbot not found")
-#
-#         # Check if appearance exists
-#         existing = (
-#             supabase.table("chatbot_appearance")
-#             .select("id")
-#             .eq("user_id", user_id)
-#             .eq("chatbot_title", chatbot_title)
-#             .execute()
-#         )
-#
-#         if not existing.data:
-#             raise HTTPException(status_code=404, detail="Appearance settings not found. Use create-appearance first.")
-#
-#         # Handle avatar upload if provided
-#         bot_avatar_url = None
-#         if avatar:
-#             # Validate file type
-#             if not avatar.content_type.startswith('image/'):
-#                 raise HTTPException(status_code=400, detail="Avatar must be an image file")
-#             
-#             # Validate file size (max 2MB)
-#             file_content = await avatar.read()
-#             if len(file_content) > 2 * 1024 * 1024:  # 2MB limit
-#                 raise HTTPException(status_code=400, detail="Avatar file too large. Maximum size is 2MB.")
-#             
-#             # Convert to base64 and store in database
-#             import base64
-#             file_extension = avatar.filename.split('.')[-1] if '.' in avatar.filename else 'png'
-#             base64_data = base64.b64encode(file_content).decode('utf-8')
-#             bot_avatar_url = f"data:image/{file_extension};base64,{base64_data}"
-#
-#         # Prepare update data - only include fields that are provided
-#         update_data = {}
-#         
-#         if bot_avatar_url is not None:
-#             update_data["bot_avatar_url"] = bot_avatar_url
-#         if theme is not None:
-#             update_data["theme"] = theme.value
-#         if primary_color_rgb is not None:
-#             update_data["primary_color_rgb"] = primary_color_rgb
-#         if border_radius_px is not None:
-#             update_data["border_radius_px"] = border_radius_px
-#         if position is not None:
-#             update_data["position"] = position.value
-#
-#         if not update_data:
-#             raise HTTPException(status_code=400, detail="No fields to update")
-#
-#         # Update appearance
-#         result = (
-#             supabase.table("chatbot_appearance")
-#             .update(update_data)
-#             .eq("user_id", user_id)
-#             .eq("chatbot_title", chatbot_title)
-#             .execute()
-#         )
-#
-#         return {
-#             "message": "Appearance updated successfully",
-#             "updated_fields": list(update_data.keys())
-#         }
-#
-#     except HTTPException:
-#         raise
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=f"Appearance update failed: {str(e)}")
+@rag_router.put("/update-appearance")
+async def update_appearance(
+    chatbot_title: str = Form(...),
+    avatar: Optional[UploadFile] = File(None),
+    theme: Optional[Theme] = Form(None),
+    primary_color_rgb: Optional[str] = Form(None),
+    border_radius_px: Optional[int] = Form(None),
+    position: Optional[Position] = Form(None),
+    language: Optional[str] = Form(None),
+    current_user: dict = Depends(get_current_user),
+):
+    """Update chatbot appearance settings."""
+    user_id = current_user["id"]
+    chatbot_title = chatbot_title.lower()
+
+    try:
+        from app.supabase import get_admin_supabase_client
+        supabase = get_admin_supabase_client()
+
+        # Check if chatbot exists
+        chatbot_exists = (
+            supabase.table("chatbot_configs")
+            .select("id")
+            .eq("user_id", user_id)
+            .eq("chatbot_title", chatbot_title)
+            .execute()
+        )
+
+        if not chatbot_exists.data:
+            raise HTTPException(status_code=404, detail="Chatbot not found")
+
+        # Check if appearance exists
+        existing = (
+            supabase.table("chatbot_appearance")
+            .select("id")
+            .eq("user_id", user_id)
+            .eq("chatbot_title", chatbot_title)
+            .execute()
+        )
+
+        if not existing.data:
+            raise HTTPException(status_code=404, detail="Appearance settings not found. Use create-appearance first.")
+
+        # Handle avatar upload if provided
+        bot_avatar_url = None
+        if avatar:
+            # Validate file type
+            if not avatar.content_type.startswith('image/'):
+                raise HTTPException(status_code=400, detail="Avatar must be an image file")
+            
+            # Validate file size (max 2MB)
+            file_content = await avatar.read()
+            if len(file_content) > 2 * 1024 * 1024:  # 2MB limit
+                raise HTTPException(status_code=400, detail="Avatar file too large. Maximum size is 2MB.")
+            
+            # Convert to base64 and store in database
+            import base64
+            file_extension = avatar.filename.split('.')[-1] if '.' in avatar.filename else 'png'
+            base64_data = base64.b64encode(file_content).decode('utf-8')
+            bot_avatar_url = f"data:image/{file_extension};base64,{base64_data}"
+
+        # Prepare update data - only include fields that are provided
+        update_data = {}
+        
+        if bot_avatar_url is not None:
+            update_data["bot_avatar_url"] = bot_avatar_url
+        if theme is not None:
+            update_data["theme"] = theme.value
+        if primary_color_rgb is not None:
+            update_data["primary_color_rgb"] = primary_color_rgb
+        if border_radius_px is not None:
+            update_data["border_radius_px"] = border_radius_px
+        if position is not None:
+            update_data["position"] = position.value
+        if language is not None:
+            normalized_language = language.strip()
+            if not normalized_language:
+                raise HTTPException(status_code=400, detail="Language cannot be empty if provided")
+            update_data["language"] = normalized_language
+
+        if not update_data:
+            raise HTTPException(status_code=400, detail="No fields to update")
+
+        # Update appearance
+        result = (
+            supabase.table("chatbot_appearance")
+            .update(update_data)
+            .eq("user_id", user_id)
+            .eq("chatbot_title", chatbot_title)
+            .execute()
+        )
+
+        return {
+            "message": "Appearance updated successfully",
+            "updated_fields": list(update_data.keys())
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Appearance update failed: {str(e)}")
 
 
 # @rag_router.get("/appearance/{chatbot_title}")
