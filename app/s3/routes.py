@@ -61,6 +61,10 @@ class RemoveRequest(BaseModel):
     chatbot_title: str
     filename: str
 
+class RemoveCrawlRequest(BaseModel):
+    chatbot_title: str
+    base_url: str
+    endpoint: str
 
 # ------------------------------------------------------------------------------------------- #
 # =========================================================================================== #
@@ -786,6 +790,57 @@ async def remove_file_vectors_api(
             index.delete(ids=ids_to_delete[i:i + batch_size], namespace=namespace)
 
         return {"message": f"Deleted {len(ids_to_delete)} vectors for file '{filename}'."}
+
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    
+    
+    
+
+@s3_router.post("/remove/crawl_vectors")
+async def remove_crawl_vectors(
+    request: RemoveCrawlRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Remove all Pinecone vectors for a specific crawled page.
+    Filters by user_id and source (base_url + endpoint).
+    """
+    try:
+        user_id = current_user["id"]
+        chatbot_title = request.chatbot_title.lower()
+
+        api_key = get_api_key(user_id, chatbot_title)
+        if not api_key:
+            raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
+
+        # Compute index and namespace
+        INDEX_NAME = f"snobbots-{sanitize_id(user_id.lower().replace(' ', '_'))}"
+        namespace = sanitize_id(chatbot_title.strip().lower().replace(" ", "_"))
+
+        if INDEX_NAME not in pc.list_indexes().names():
+            raise HTTPException(404, f"Pinecone index '{INDEX_NAME}' not found")
+
+        index = pc.Index(INDEX_NAME)
+
+        # Construct full source string
+        source_str = f"{request.base_url.rstrip('/')}{request.endpoint}"
+
+        # Delete vectors by filter
+        resp = index.delete(
+            namespace=namespace,
+            filter={
+                "source": source_str,
+                "user_id": user_id
+            }
+        )
+
+        return {
+            "success": True,
+            "removed_count": resp.get("deletedCount", "unknown"),
+            "source": source_str,
+            "namespace": namespace,
+        }
 
     except Exception as e:
         raise HTTPException(500, str(e))
