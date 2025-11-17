@@ -728,3 +728,64 @@ async def remove_qa_vectors_api(
 
     except Exception as e:
         raise HTTPException(500, str(e))
+    
+    
+    # ------------------ REMOVE VECTORS FOR SPECIFIC FILE ------------------ #
+@s3_router.post("/remove/file_vectors")
+async def remove_file_vectors_api(
+    request: RemoveRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Delete all Pinecone vectors corresponding to a specific file or raw upload.
+    Uses metadata.source = request.filename to filter vectors.
+    """
+    try:
+        user_id = current_user["id"]
+        chatbot_title = request.chatbot_title.lower()
+        filename = request.filename
+
+        api_key = get_api_key(user_id, chatbot_title)
+        if not api_key:
+            raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
+
+        INDEX_NAME = f"snobbots-{sanitize_id(user_id.lower().replace(' ', '_'))}"
+        namespace = sanitize_id(chatbot_title.strip().lower().replace(" ", "_"))
+
+        index = pc.Index(INDEX_NAME)
+        dimension = 3072  # match your index
+
+        ids_to_delete = []
+        top_k = 1000
+
+        while True:
+            # Dummy vector for metadata-only query
+            response = index.query(
+                vector=[0.0] * dimension,
+                top_k=top_k,
+                include_metadata=True,
+                filter={"source": filename, "user_id": user_id},
+                namespace=namespace
+            )
+
+            matches = response.get("matches", [])
+            if not matches:
+                break
+
+            ids_to_delete.extend([m["id"] for m in matches])
+
+            if len(matches) < top_k:
+                break
+
+        if not ids_to_delete:
+            return {"message": f"No vectors found for file '{filename}'."}
+
+        # Delete in batches
+        batch_size = 500
+        for i in range(0, len(ids_to_delete), batch_size):
+            index.delete(ids=ids_to_delete[i:i + batch_size], namespace=namespace)
+
+        return {"message": f"Deleted {len(ids_to_delete)} vectors for file '{filename}'."}
+
+    except Exception as e:
+        raise HTTPException(500, str(e))
