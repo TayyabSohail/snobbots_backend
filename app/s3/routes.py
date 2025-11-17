@@ -11,14 +11,18 @@ from app.s3.s3_helper import (
     delete_file_from_s3,
 )
 from app.RAG.auth_utils import get_current_user, get_api_key
-
+from pinecone import Pinecone, ServerlessSpec
+import os
 # Internal RAG imports (internal calls, Option 1)
-from app.RAG.pdf_processor import process_and_index_data
+from app.RAG.pdf_processor import process_and_index_data,sanitize_id
 from app.RAG.token_tracker import update_tokens
 from app.RAG import routes as rag_routes  # to call fetch_and_index internally (async)
 # NOTE: rag_routes.fetch_and_index is async; we'll await it in crawl flow below
 
 s3_router = APIRouter(prefix="/s3", tags=["S3"])
+
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+pc = Pinecone(api_key=PINECONE_API_KEY)
 
 # ------------------ MODELS ------------------ #
 class RawTextRequest(BaseModel):
@@ -604,5 +608,123 @@ async def remove_crawl_api(
             raise HTTPException(404, result["message"])
 
         return {"success": True, "removed_file": request.filename}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    
+    # ------------------ REMOVE RAW TEXT VECTORS ------------------ #
+@s3_router.post("/remove/raw_vectors")
+async def remove_raw_vectors_api(
+    request: FetchRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        user_id = current_user["id"]
+        chatbot_title = request.chatbot_title.lower()
+
+        api_key = get_api_key(user_id, chatbot_title)
+        if not api_key:
+            raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
+
+        INDEX_NAME = f"snobbots-{sanitize_id(user_id.lower().replace(' ', '_'))}"
+        namespace = sanitize_id(chatbot_title.strip().lower().replace(" ", "_"))
+
+        index = pc.Index(INDEX_NAME)
+        dimension = 3072  # your index dimension
+
+        ids_to_delete = []
+        top_k = 1000
+        offset = 0
+
+        while True:
+            # Use a dummy vector for query; Pinecone ignores it if filter is present
+            response = index.query(
+                vector=[0.0] * dimension,
+                top_k=top_k,
+                include_metadata=True,
+                filter={"source": "raw_text", "user_id": user_id},
+                namespace=namespace
+            )
+
+            matches = response.get("matches", [])
+            if not matches:
+                break
+
+            ids_to_delete.extend([m["id"] for m in matches])
+
+            # Stop if fewer than top_k returned
+            if len(matches) < top_k:
+                break
+
+            offset += top_k
+
+        if not ids_to_delete:
+            return {"message": "No raw_text vectors found to delete."}
+
+        # Delete in batches
+        batch_size = 500
+        for i in range(0, len(ids_to_delete), batch_size):
+            index.delete(ids=ids_to_delete[i:i + batch_size], namespace=namespace)
+
+        return {"message": f"Deleted {len(ids_to_delete)} raw_text vectors from Pinecone."}
+
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    
+    # ------------------ REMOVE QA VECTORS ------------------ #
+@s3_router.post("/remove/qa_vectors")
+async def remove_qa_vectors_api(
+    request: FetchRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Delete all Pinecone vectors with metadata.source == 'qa_json' for the given chatbot.
+    Uses dummy vector + metadata filter + batching to handle large numbers of vectors.
+    """
+    try:
+        user_id = current_user["id"]
+        chatbot_title = request.chatbot_title.lower()
+
+        api_key = get_api_key(user_id, chatbot_title)
+        if not api_key:
+            raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
+
+        INDEX_NAME = f"snobbots-{sanitize_id(user_id.lower().replace(' ', '_'))}"
+        namespace = sanitize_id(chatbot_title.strip().lower().replace(" ", "_"))
+
+        index = pc.Index(INDEX_NAME)
+        dimension = 3072  # match your index dimension
+
+        ids_to_delete = []
+        top_k = 1000
+
+        while True:
+            # Dummy vector to enable metadata filtering
+            response = index.query(
+                vector=[0.0] * dimension,
+                top_k=top_k,
+                include_metadata=True,
+                filter={"source": "qa_json", "user_id": user_id},
+                namespace=namespace
+            )
+
+            matches = response.get("matches", [])
+            if not matches:
+                break
+
+            ids_to_delete.extend([m["id"] for m in matches])
+
+            if len(matches) < top_k:
+                break
+
+        if not ids_to_delete:
+            return {"message": "No QA vectors found to delete."}
+
+        # Delete in batches
+        batch_size = 500
+        for i in range(0, len(ids_to_delete), batch_size):
+            index.delete(ids=ids_to_delete[i:i + batch_size], namespace=namespace)
+
+        return {"message": f"Deleted {len(ids_to_delete)} QA vectors from Pinecone."}
+
     except Exception as e:
         raise HTTPException(500, str(e))
