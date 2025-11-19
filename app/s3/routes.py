@@ -2,6 +2,8 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from pydantic import BaseModel, model_validator
 import json
 from typing import List, Dict, Any, Optional, Union
+import re
+from urllib.parse import urlparse
 
 from app.s3.s3_helper import (
     upload_file_to_s3,
@@ -62,10 +64,25 @@ class RemoveRequest(BaseModel):
     filename: str
 
     
-class RemoveCrawlAndVectorsRequest(BaseModel):
+class RemoveCrawlRequest(BaseModel):
     chatbot_title: str
-    filename: Optional[str] = None  # For S3 removal
-    url: Optional[str] = None       # For Pinecone vector removal
+    url: str
+    
+
+def url_to_filename(url: str) -> str:
+    """
+    Converts a URL to a safe filename for S3.
+    Example: https://www.axeonic.com/ -> www.axeonic.com.txt
+             https://www.axeonic.com/page -> www.axeonic.com_page.txt
+    """
+    parsed = urlparse(url)
+    # Combine netloc + path
+    path = parsed.netloc + parsed.path
+    # Remove trailing slash
+    path = path.rstrip("/")
+    # Replace any non-alphanumeric character with _
+    filename = re.sub(r"[^A-Za-z0-9\-\.]", "_", path)
+    return f"{filename}.txt"
     
 # ------------------------------------------------------------------------------------------- #
 # =========================================================================================== #
@@ -290,90 +307,95 @@ async def upload_crawl_to_s3_api(
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Save crawl URLs to S3 and then trigger internal RAG fetch_and_index for each URL.
-    This uses your existing Playwright-based fetch_and_index in app.RAG.routes (internal async call).
+    Save each crawl URL to S3 as its own file (one file per URL)
+    and trigger internal RAG fetch_and_index for each URL.
     """
     try:
         user_id = current_user["id"]
         chatbot_title = request.chatbot_title.lower()
 
+        # Check API key
         api_key = get_api_key(user_id, chatbot_title)
         if not api_key:
             raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
 
-        # Get URLs list (handles both single and multiple)
+        # Validate URLs
         urls_list = request.url_list
         if not urls_list:
             raise HTTPException(400, "At least one URL must be provided")
 
-        # Save the list of URLs as a newline-separated file
-        content = "\n".join(urls_list)
-        file_bytes = content.encode("utf-8")
-
-        s3_key = f"{user_id}/{chatbot_title}/crawls/{chatbot_title}.txt"
-
-        result = upload_file_to_s3(file_bytes, s3_key, "text/plain")
-        if result["status"] == "error":
-            raise HTTPException(500, result["message"])
-
-        # Now call rag_routes.fetch_and_index internally for each URL.
         indexing_summary = {
             "success_count": 0,
             "failed": [],
             "details": []
         }
 
+        saved_files = []  # track file names saved in S3
+
         for url in urls_list:
+
+            # -----------------------------
+            # Create a filename from URL
+            # -----------------------------
+            filename = url_to_filename(url)
+
+            file_bytes = url.encode("utf-8")
+
+            # ---------------------------------
+            # Save file to S3 (one per URL)
+            # ---------------------------------
+            s3_key = f"{user_id}/{chatbot_title}/crawls/{filename}"
+            result = upload_file_to_s3(file_bytes, s3_key, "text/plain")
+
+            if result["status"] == "error":
+                indexing_summary["failed"].append({
+                    "url": url,
+                    "error": result["message"]
+                })
+                continue
+
+            saved_files.append(filename)
+
+            # --------------------------------------
+            # Trigger internal fetch_and_index
+            # --------------------------------------
             try:
-                # Build a small FetchRequest-like object expected by rag_routes.fetch_and_index
-                # rag_routes.fetch_and_index signature: async def fetch_and_index(request: FetchRequest, current_user: dict)
                 fetch_req = rag_routes.FetchRequest(
                     base_url=url,
-                    endpoint="",  # treat whole URL as base_url; your fetch implementation should handle it
+                    endpoint="",
                     chatbot_title=chatbot_title,
                 )
 
-                # Call the internal async endpoint directly
                 resp = await rag_routes.fetch_and_index(fetch_req, current_user)
 
-                # Expect the response to be a dict matching your /crawl/fetch returns
                 indexing_summary["success_count"] += 1
                 indexing_summary["details"].append({
                     "url": url,
                     "result": resp
                 })
 
-                # Sum tokens if present (update token tracker already done by fetch_and_index internally,
-                # but if you want to be explicit you could update tokens here too. We assume fetch_and_index updates tokens).
             except Exception as e:
                 indexing_summary["failed"].append({
                     "url": url,
                     "error": str(e)
                 })
 
-        # Build response based on single vs multiple URLs
-        response = {
-            "url": result["url"],
+        # -----------------------------
+        # Build final API response
+        # -----------------------------
+        return {
             "chatbot_title": chatbot_title,
             "uploaded_by": user_id,
+            "saved_files": saved_files,
             "source": "web_crawling",
             "indexing_summary": indexing_summary
         }
-        
-        # Use saved_url for single, saved_urls for multiple (matching docs)
-        if request.url:
-            response["saved_url"] = request.url
-        else:
-            response["saved_urls"] = request.urls
-        
-        return response
 
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(500, str(e))
-
-
+    
 # ------------------------------------------------------------------------------------------- #
 # =========================================================================================== #
 # -------------------------------------- FETCH APIs ----------------------------------------- #
@@ -769,7 +791,7 @@ async def remove_raw_and_vectors_api(
     
 @s3_router.post("/remove/crawl")
 async def remove_crawl_and_vectors(
-    request: RemoveCrawlAndVectorsRequest,
+    request: RemoveCrawlRequest,
     current_user: dict = Depends(get_current_user),
 ):
     try:
@@ -783,12 +805,13 @@ async def remove_crawl_and_vectors(
             raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
 
         # Remove file from S3 if filename is provided
-        if request.filename:
-            key = f"{user_id}/{chatbot_title}/crawls/{request.filename}"
+        if request.url:
+            filename= url_to_filename(request.url)
+            key = f"{user_id}/{chatbot_title}/crawls/{filename}"
             result = delete_file_from_s3(key)
             if result["status"] == "error":
                 raise HTTPException(404, result["message"])
-            removed_files.append(request.filename)
+            removed_files.append(filename)
 
         # Remove vectors from Pinecone if URL is provided
         if request.url:
