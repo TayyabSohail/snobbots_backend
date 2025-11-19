@@ -11,14 +11,18 @@ from app.s3.s3_helper import (
     delete_file_from_s3,
 )
 from app.RAG.auth_utils import get_current_user, get_api_key
-
+from pinecone import Pinecone, ServerlessSpec
+import os
 # Internal RAG imports (internal calls, Option 1)
-from app.RAG.pdf_processor import process_and_index_data
+from app.RAG.pdf_processor import process_and_index_data,sanitize_id
 from app.RAG.token_tracker import update_tokens
 from app.RAG import routes as rag_routes  # to call fetch_and_index internally (async)
 # NOTE: rag_routes.fetch_and_index is async; we'll await it in crawl flow below
 
 s3_router = APIRouter(prefix="/s3", tags=["S3"])
+
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+pc = Pinecone(api_key=PINECONE_API_KEY)
 
 # ------------------ MODELS ------------------ #
 class RawTextRequest(BaseModel):
@@ -57,7 +61,10 @@ class RemoveRequest(BaseModel):
     chatbot_title: str
     filename: str
 
-
+class RemoveCrawlRequest(BaseModel):
+    chatbot_title: str
+    url: str
+    
 # ------------------------------------------------------------------------------------------- #
 # =========================================================================================== #
 # -------------------------------------- UPLOAD APIs ---------------------------------------- #
@@ -507,80 +514,80 @@ async def fetch_crawl_api(
 # =========================================================================================== #
 # ------------------------------------------------------------------------------------------- #
 
-# ------------------ REMOVE FILE ------------------ #
-@s3_router.post("/remove/file")
-async def remove_file_api(
-    request: RemoveRequest,
-    current_user: dict = Depends(get_current_user),
-):
-    try:
-        user_id = current_user["id"]
-        chatbot_title = request.chatbot_title.lower()
+# # ------------------ REMOVE FILE ------------------ #
+# @s3_router.post("/remove/file")
+# async def remove_file_api(
+#     request: RemoveRequest,
+#     current_user: dict = Depends(get_current_user),
+# ):
+#     try:
+#         user_id = current_user["id"]
+#         chatbot_title = request.chatbot_title.lower()
 
-        # 🔐 Check API key before removing
-        api_key = get_api_key(user_id, chatbot_title)
-        if not api_key:
-            raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
+#         # 🔐 Check API key before removing
+#         api_key = get_api_key(user_id, chatbot_title)
+#         if not api_key:
+#             raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
 
-        key = f"{user_id}/{chatbot_title}/files/{request.filename}"
-        result = delete_file_from_s3(key)
+#         key = f"{user_id}/{chatbot_title}/files/{request.filename}"
+#         result = delete_file_from_s3(key)
 
-        if result["status"] == "error":
-            raise HTTPException(404, result["message"])
+#         if result["status"] == "error":
+#             raise HTTPException(404, result["message"])
 
-        return {"success": True, "removed_file": request.filename}
-    except Exception as e:
-        raise HTTPException(500, str(e))
-
-
-# ------------------ REMOVE RAW ------------------ #
-@s3_router.post("/remove/raw")
-async def remove_raw_api(
-    request: RemoveRequest,
-    current_user: dict = Depends(get_current_user),
-):
-    try:
-        user_id = current_user["id"]
-        chatbot_title = request.chatbot_title.lower()
-
-        api_key = get_api_key(user_id, chatbot_title)
-        if not api_key:
-            raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
-
-        key = f"{user_id}/{chatbot_title}/raw/{request.filename}"
-        result = delete_file_from_s3(key)
-
-        if result["status"] == "error":
-            raise HTTPException(404, result["message"])
-
-        return {"success": True, "removed_file": request.filename}
-    except Exception as e:
-        raise HTTPException(500, str(e))
+#         return {"success": True, "removed_file": request.filename}
+#     except Exception as e:
+#         raise HTTPException(500, str(e))
 
 
-# ------------------ REMOVE QA ------------------ #
-@s3_router.post("/remove/qa")
-async def remove_qa_api(
-    request: RemoveRequest,
-    current_user: dict = Depends(get_current_user),
-):
-    try:
-        user_id = current_user["id"]
-        chatbot_title = request.chatbot_title.lower()
+# # ------------------ REMOVE RAW ------------------ #
+# @s3_router.post("/remove/raw")
+# async def remove_raw_api(
+#     request: RemoveRequest,
+#     current_user: dict = Depends(get_current_user),
+# ):
+#     try:
+#         user_id = current_user["id"]
+#         chatbot_title = request.chatbot_title.lower()
 
-        api_key = get_api_key(user_id, chatbot_title)
-        if not api_key:
-            raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
+#         api_key = get_api_key(user_id, chatbot_title)
+#         if not api_key:
+#             raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
 
-        key = f"{user_id}/{chatbot_title}/qa/{request.filename}"
-        result = delete_file_from_s3(key)
+#         key = f"{user_id}/{chatbot_title}/raw/{request.filename}"
+#         result = delete_file_from_s3(key)
 
-        if result["status"] == "error":
-            raise HTTPException(404, result["message"])
+#         if result["status"] == "error":
+#             raise HTTPException(404, result["message"])
 
-        return {"success": True, "removed_file": request.filename}
-    except Exception as e:
-        raise HTTPException(500, str(e))
+#         return {"success": True, "removed_file": request.filename}
+#     except Exception as e:
+#         raise HTTPException(500, str(e))
+
+
+# # ------------------ REMOVE QA ------------------ #
+# @s3_router.post("/remove/qa")
+# async def remove_qa_api(
+#     request: RemoveRequest,
+#     current_user: dict = Depends(get_current_user),
+# ):
+#     try:
+#         user_id = current_user["id"]
+#         chatbot_title = request.chatbot_title.lower()
+
+#         api_key = get_api_key(user_id, chatbot_title)
+#         if not api_key:
+#             raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
+
+#         key = f"{user_id}/{chatbot_title}/qa/{request.filename}"
+#         result = delete_file_from_s3(key)
+
+#         if result["status"] == "error":
+#             raise HTTPException(404, result["message"])
+
+#         return {"success": True, "removed_file": request.filename}
+#     except Exception as e:
+#         raise HTTPException(500, str(e))
 
 
 # ------------------ REMOVE CRAWL ------------------ #
@@ -606,3 +613,494 @@ async def remove_crawl_api(
         return {"success": True, "removed_file": request.filename}
     except Exception as e:
         raise HTTPException(500, str(e))
+    
+    # ------------------ REMOVE RAW TEXT VECTORS ------------------ #
+# @s3_router.post("/remove/raw_vectors")
+# async def remove_raw_vectors_api(
+#     request: FetchRequest,
+#     current_user: dict = Depends(get_current_user),
+# ):
+#     try:
+#         user_id = current_user["id"]
+#         chatbot_title = request.chatbot_title.lower()
+
+#         api_key = get_api_key(user_id, chatbot_title)
+#         if not api_key:
+#             raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
+
+#         INDEX_NAME = f"snobbots-{sanitize_id(user_id.lower().replace(' ', '_'))}"
+#         namespace = sanitize_id(chatbot_title.strip().lower().replace(" ", "_"))
+
+#         index = pc.Index(INDEX_NAME)
+#         dimension = 3072  # your index dimension
+
+#         ids_to_delete = []
+#         top_k = 1000
+#         offset = 0
+
+#         while True:
+#             # Use a dummy vector for query; Pinecone ignores it if filter is present
+#             response = index.query(
+#                 vector=[0.0] * dimension,
+#                 top_k=top_k,
+#                 include_metadata=True,
+#                 filter={"source": "raw_text", "user_id": user_id},
+#                 namespace=namespace
+#             )
+
+#             matches = response.get("matches", [])
+#             if not matches:
+#                 break
+
+#             ids_to_delete.extend([m["id"] for m in matches])
+
+#             # Stop if fewer than top_k returned
+#             if len(matches) < top_k:
+#                 break
+
+#             offset += top_k
+
+#         if not ids_to_delete:
+#             return {"message": "No raw_text vectors found to delete."}
+
+#         # Delete in batches
+#         batch_size = 500
+#         for i in range(0, len(ids_to_delete), batch_size):
+#             index.delete(ids=ids_to_delete[i:i + batch_size], namespace=namespace)
+
+#         return {"message": f"Deleted {len(ids_to_delete)} raw_text vectors from Pinecone."}
+
+#     except Exception as e:
+#         raise HTTPException(500, str(e))
+    
+#     # ------------------ REMOVE QA VECTORS ------------------ #
+# @s3_router.post("/remove/qa_vectors")
+# async def remove_qa_vectors_api(
+#     request: FetchRequest,
+#     current_user: dict = Depends(get_current_user),
+# ):
+#     """
+#     Delete all Pinecone vectors with metadata.source == 'qa_json' for the given chatbot.
+#     Uses dummy vector + metadata filter + batching to handle large numbers of vectors.
+#     """
+#     try:
+#         user_id = current_user["id"]
+#         chatbot_title = request.chatbot_title.lower()
+
+#         api_key = get_api_key(user_id, chatbot_title)
+#         if not api_key:
+#             raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
+
+#         INDEX_NAME = f"snobbots-{sanitize_id(user_id.lower().replace(' ', '_'))}"
+#         namespace = sanitize_id(chatbot_title.strip().lower().replace(" ", "_"))
+
+#         index = pc.Index(INDEX_NAME)
+#         dimension = 3072  # match your index dimension
+
+#         ids_to_delete = []
+#         top_k = 1000
+
+#         while True:
+#             # Dummy vector to enable metadata filtering
+#             response = index.query(
+#                 vector=[0.0] * dimension,
+#                 top_k=top_k,
+#                 include_metadata=True,
+#                 filter={"source": "qa_json", "user_id": user_id},
+#                 namespace=namespace
+#             )
+
+#             matches = response.get("matches", [])
+#             if not matches:
+#                 break
+
+#             ids_to_delete.extend([m["id"] for m in matches])
+
+#             if len(matches) < top_k:
+#                 break
+
+#         if not ids_to_delete:
+#             return {"message": "No QA vectors found to delete."}
+
+#         # Delete in batches
+#         batch_size = 500
+#         for i in range(0, len(ids_to_delete), batch_size):
+#             index.delete(ids=ids_to_delete[i:i + batch_size], namespace=namespace)
+
+#         return {"message": f"Deleted {len(ids_to_delete)} QA vectors from Pinecone."}
+
+#     except Exception as e:
+#         raise HTTPException(500, str(e))
+    
+    
+#     # ------------------ REMOVE VECTORS FOR SPECIFIC FILE ------------------ #
+# @s3_router.post("/remove/file_vectors")
+# async def remove_file_vectors_api(
+#     request: RemoveRequest,
+#     current_user: dict = Depends(get_current_user),
+# ):
+#     """
+#     Delete all Pinecone vectors corresponding to a specific file or raw upload.
+#     Uses metadata.source = request.filename to filter vectors.
+#     """
+#     try:
+#         user_id = current_user["id"]
+#         chatbot_title = request.chatbot_title.lower()
+#         filename = request.filename
+
+#         api_key = get_api_key(user_id, chatbot_title)
+#         if not api_key:
+#             raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
+
+#         INDEX_NAME = f"snobbots-{sanitize_id(user_id.lower().replace(' ', '_'))}"
+#         namespace = sanitize_id(chatbot_title.strip().lower().replace(" ", "_"))
+
+#         index = pc.Index(INDEX_NAME)
+#         dimension = 3072  # match your index
+
+#         ids_to_delete = []
+#         top_k = 1000
+
+#         while True:
+#             # Dummy vector for metadata-only query
+#             response = index.query(
+#                 vector=[0.0] * dimension,
+#                 top_k=top_k,
+#                 include_metadata=True,
+#                 filter={"source": filename, "user_id": user_id},
+#                 namespace=namespace
+#             )
+
+#             matches = response.get("matches", [])
+#             if not matches:
+#                 break
+
+#             ids_to_delete.extend([m["id"] for m in matches])
+
+#             if len(matches) < top_k:
+#                 break
+
+#         if not ids_to_delete:
+#             return {"message": f"No vectors found for file '{filename}'."}
+
+#         # Delete in batches
+#         batch_size = 500
+#         for i in range(0, len(ids_to_delete), batch_size):
+#             index.delete(ids=ids_to_delete[i:i + batch_size], namespace=namespace)
+
+#         return {"message": f"Deleted {len(ids_to_delete)} vectors for file '{filename}'."}
+
+#     except Exception as e:
+#         raise HTTPException(500, str(e))
+    
+    
+    
+
+@s3_router.post("/remove/crawl_vectors")
+async def remove_crawl_vectors(
+    request: RemoveCrawlRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Remove all Pinecone vectors for a specific crawled page.
+    Filters by user_id and source (url).
+    """
+    try:
+        user_id = current_user["id"]
+        chatbot_title = request.chatbot_title.lower()
+
+        api_key = get_api_key(user_id, chatbot_title)
+        if not api_key:
+            raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
+
+        # Compute index and namespace
+        INDEX_NAME = f"snobbots-{sanitize_id(user_id.lower().replace(' ', '_'))}"
+        namespace = sanitize_id(chatbot_title.strip().lower().replace(" ", "_"))
+
+        if INDEX_NAME not in pc.list_indexes().names():
+            raise HTTPException(404, f"Pinecone index '{INDEX_NAME}' not found")
+
+        index = pc.Index(INDEX_NAME)
+
+        # Construct full source string
+        source_str = f"{request.url.rstrip('/')}"
+
+        # Delete vectors by filter
+        resp = index.delete(
+            namespace=namespace,
+            filter={
+                "source": source_str,
+                "user_id": user_id
+            }
+        )
+
+        return {
+            "success": True,
+            "removed_count": resp.get("deletedCount", "unknown"),
+            "source": source_str,
+            "namespace": namespace,
+        }
+
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    
+    
+    
+    
+    
+# ------------------------------------------------------------------------------------------- #
+# =========================================================================================== #
+# -------------------------------------- COMBINED REMOVE APIs ------------------------------- #
+# =========================================================================================== #
+# ------------------------------------------------------------------------------------------- #
+# ------------------ REMOVE FILE + VECTORS ------------------ #
+@s3_router.post("/remove/file")
+async def remove_file_and_vectors_api(
+    request: RemoveRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Remove file from S3 AND delete all Pinecone vectors whose metadata.source == filename.
+    """
+    try:
+        user_id = current_user["id"]
+        chatbot_title = request.chatbot_title.lower()
+        filename = request.filename
+
+        # 🔐 Validate API key
+        api_key = get_api_key(user_id, chatbot_title)
+        if not api_key:
+            raise HTTPException(
+                403,
+                f"No active API key found for chatbot '{chatbot_title}'"
+            )
+
+        # ---------------------------------------------------------
+        # 1️⃣ DELETE FILE FROM S3
+        # ---------------------------------------------------------
+        key = f"{user_id}/{chatbot_title}/files/{filename}"
+        s3_result = delete_file_from_s3(key)
+
+        if s3_result["status"] == "error":
+            raise HTTPException(404, s3_result["message"])
+
+        # ---------------------------------------------------------
+        # 2️⃣ DELETE CORRESPONDING PINECONE VECTORS
+        # ---------------------------------------------------------
+        INDEX_NAME = f"snobbots-{sanitize_id(user_id.lower().replace(' ', '_'))}"
+        namespace = sanitize_id(chatbot_title.strip().lower().replace(" ", "_"))
+
+        index = pc.Index(INDEX_NAME)
+        dimension = 3072  # match embedding dimension
+
+        ids_to_delete = []
+        top_k = 1000
+
+        while True:
+            response = index.query(
+                vector=[0.0] * dimension,           # dummy vector
+                top_k=top_k,
+                include_metadata=True,
+                filter={"source": filename, "user_id": user_id},
+                namespace=namespace
+            )
+
+            matches = response.get("matches", [])
+            if not matches:
+                break
+
+            ids_to_delete.extend([m["id"] for m in matches])
+
+            if len(matches) < top_k:
+                break
+
+        # Delete in Pinecone
+        deleted_count = 0
+        if ids_to_delete:
+            batch_size = 500
+            for i in range(0, len(ids_to_delete), batch_size):
+                batch = ids_to_delete[i:i + batch_size]
+                index.delete(ids=batch, namespace=namespace)
+                deleted_count += len(batch)
+
+        return {
+            "success": True,
+            "removed_file": filename,
+            "vectors_deleted": deleted_count,
+            "message": f"Removed file '{filename}' and deleted {deleted_count} vectors."
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    
+    
+@s3_router.post("/remove/qa")
+async def remove_qa_and_vectors_api(
+    request: RemoveRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    1) Deletes the QA file from S3.
+    2) Deletes all Pinecone vectors where:
+        metadata.source == "qa_json"
+        metadata.filename == request.filename
+        metadata.user_id == current_user.id
+    """
+    try:
+        user_id = current_user["id"]
+        chatbot_title = request.chatbot_title.lower()
+
+        # Validate API Key
+        api_key = get_api_key(user_id, chatbot_title)
+        if not api_key:
+            raise HTTPException(
+                403,
+                f"No active API key found for chatbot '{chatbot_title}'"
+            )
+
+        # ----------- STEP 1: DELETE FILE FROM S3 -----------
+        key = f"{user_id}/{chatbot_title}/qa/{request.filename}"
+        result = delete_file_from_s3(key)
+
+        if result["status"] == "error":
+            raise HTTPException(404, result["message"])
+
+        # ----------- STEP 2: DELETE MATCHING PINECONE VECTORS -----------
+
+        INDEX_NAME = f"snobbots-{sanitize_id(str(user_id).lower())}"
+        namespace = sanitize_id(chatbot_title.strip().lower())
+
+        index = pc.Index(INDEX_NAME)
+        dimension = 3072
+        top_k = 1000
+        ids_to_delete = []
+
+        # Query in loops until no more matches
+        while True:
+            response = index.query(
+                vector=[0.0] * dimension,
+                top_k=top_k,
+                include_metadata=True,
+                namespace=namespace,
+                filter={
+                    "source": "qa_json",
+                    "user_id": user_id
+                }
+            )
+
+            matches = response.get("matches", [])
+            if not matches:
+                break
+
+            ids_to_delete.extend([m["id"] for m in matches])
+
+            if len(matches) < top_k:
+                break
+
+        # Perform deletion
+        if ids_to_delete:
+            batch_size = 500
+            for i in range(0, len(ids_to_delete), batch_size):
+                index.delete(
+                    ids=ids_to_delete[i:i + batch_size],
+                    namespace=namespace
+                )
+
+        return {
+            "success": True,
+            "removed_file": request.filename,
+            "deleted_vectors": len(ids_to_delete)
+        }
+
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    
+@s3_router.post("/remove/raw")
+async def remove_raw_and_vectors_api(
+    request: RemoveRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    1) Delete RAW file from S3.
+    2) Delete all Pinecone vectors that match:
+        metadata.source == "raw_text"
+        metadata.filename == request.filename
+        metadata.user_id == current_user.id
+    """
+    try:
+        user_id = current_user["id"]
+        chatbot_title = request.chatbot_title.lower()
+
+        # Validate chatbot API key
+        api_key = get_api_key(user_id, chatbot_title)
+        if not api_key:
+            raise HTTPException(
+                403, f"No active API key found for chatbot '{chatbot_title}'"
+            )
+
+        # ---------------------- STEP 1: DELETE FROM S3 ----------------------
+        key = f"{user_id}/{chatbot_title}/raw/{request.filename}"
+        result = delete_file_from_s3(key)
+
+        if result["status"] == "error":
+            raise HTTPException(404, result["message"])
+
+        # ---------------------- STEP 2: DELETE FROM PINECONE ----------------------
+        INDEX_NAME = f"snobbots-{sanitize_id(str(user_id).lower())}"
+        namespace = sanitize_id(chatbot_title.strip().lower())
+
+        index = pc.Index(INDEX_NAME)
+        dimension = 3072  # Your index dimension
+        top_k = 1000
+
+        ids_to_delete = []
+
+        # Loop to collect ALL matching vectors
+        while True:
+            response = index.query(
+                vector=[0.0] * dimension,      # Dummy vector
+                top_k=top_k,
+                include_metadata=True,
+                namespace=namespace,
+                filter={
+                    "source": "raw_text",
+                    "user_id": user_id
+                }
+            )
+
+            matches = response.get("matches", [])
+            if not matches:
+                break
+
+            ids_to_delete.extend([m["id"] for m in matches])
+
+            if len(matches) < top_k:
+                break
+
+        # No matching vectors?
+        if not ids_to_delete:
+            return {
+                "success": True,
+                "removed_file": request.filename,
+                "deleted_vectors": 0
+            }
+
+        # Batch delete
+        batch_size = 500
+        for i in range(0, len(ids_to_delete), batch_size):
+            index.delete(
+                ids=ids_to_delete[i:i + batch_size],
+                namespace=namespace
+            )
+
+        return {
+            "success": True,
+            "removed_file": request.filename,
+            "deleted_vectors": len(ids_to_delete)
+        }
+
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    

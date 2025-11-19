@@ -702,6 +702,8 @@ async def fetch_and_index(
     NOTE: This is now an internal function used by /s3/upload/crawl.
     Use /s3/upload/crawl endpoint for crawling multiple URLs.
     """
+    source_for_indexing = f"{request.base_url.rstrip('/')}{request.endpoint}"
+
     global _browser
     if not _browser:
         raise HTTPException(status_code=500, detail="Playwright browser not initialized.")
@@ -720,7 +722,6 @@ async def fetch_and_index(
         )
 
     full_url = urljoin(request.base_url, request.endpoint)
-
     try:
         page = await _browser.new_page()
         await page.goto(full_url, wait_until="domcontentloaded", timeout=90000)
@@ -780,7 +781,7 @@ async def fetch_and_index(
             user_id=user_id,
             raw_text="\n\n".join(texts_to_index),
             filename=request.endpoint.strip("/"),
-            source_type="web_crawling",
+            source_type=source_for_indexing,
             chatbot_title=chatbot_title,
         )
 
