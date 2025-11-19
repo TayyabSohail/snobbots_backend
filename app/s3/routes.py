@@ -65,6 +65,11 @@ class RemoveCrawlRequest(BaseModel):
     chatbot_title: str
     url: str
     
+class RemoveCrawlAndVectorsRequest(BaseModel):
+    chatbot_title: str
+    filename: Optional[str] = None  # For S3 removal
+    url: Optional[str] = None       # For Pinecone vector removal
+    
 # ------------------------------------------------------------------------------------------- #
 # =========================================================================================== #
 # -------------------------------------- UPLOAD APIs ---------------------------------------- #
@@ -1104,3 +1109,60 @@ async def remove_raw_and_vectors_api(
     except Exception as e:
         raise HTTPException(500, str(e))
     
+    
+@s3_router.post("/remove/crawl_and_vectors")
+async def remove_crawl_and_vectors(
+    request: RemoveCrawlAndVectorsRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        user_id = current_user["id"]
+        removed_files = []
+        removed_vectors = []
+
+        chatbot_title = request.chatbot_title.lower()
+        api_key = get_api_key(user_id, chatbot_title)
+        if not api_key:
+            raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
+
+        # Remove file from S3 if filename is provided
+        if request.filename:
+            key = f"{user_id}/{chatbot_title}/crawls/{request.filename}"
+            result = delete_file_from_s3(key)
+            if result["status"] == "error":
+                raise HTTPException(404, result["message"])
+            removed_files.append(request.filename)
+
+        # Remove vectors from Pinecone if URL is provided
+        if request.url:
+            INDEX_NAME = f"snobbots-{sanitize_id(user_id.lower().replace(' ', '_'))}"
+            namespace = sanitize_id(chatbot_title.strip().lower().replace(" ", "_"))
+
+            if INDEX_NAME not in pc.list_indexes().names():
+                raise HTTPException(404, f"Pinecone index '{INDEX_NAME}' not found")
+
+            index = pc.Index(INDEX_NAME)
+            source_str = request.url.rstrip("/")
+
+            resp = index.delete(
+                namespace=namespace,
+                filter={
+                    "source": source_str,
+                    "user_id": user_id
+                }
+            )
+
+            removed_vectors.append({
+                "source": source_str,
+                "namespace": namespace,
+                "removed_count": resp.get("deletedCount", "unknown")
+            })
+
+        return {
+            "success": True,
+            "removed_files": removed_files,
+            "removed_vectors": removed_vectors,
+        }
+
+    except Exception as e:
+        raise HTTPException(500, str(e))
