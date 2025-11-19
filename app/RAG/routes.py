@@ -722,7 +722,6 @@ async def fetch_and_index(
         )
 
     full_url = urljoin(request.base_url, request.endpoint)
-
     try:
         page = await _browser.new_page()
         await page.goto(full_url, wait_until="domcontentloaded", timeout=90000)
