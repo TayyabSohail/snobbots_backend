@@ -767,7 +767,7 @@ async def remove_raw_and_vectors_api(
         raise HTTPException(500, str(e))
     
     
-@s3_router.post("/remove/crawl_and_vectors")
+@s3_router.post("/remove/crawl")
 async def remove_crawl_and_vectors(
     request: RemoveCrawlAndVectorsRequest,
     current_user: dict = Depends(get_current_user),
