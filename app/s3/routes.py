@@ -299,16 +299,13 @@ async def upload_qa_to_s3_api(
     except Exception as e:
         raise HTTPException(500, str(e))
 
-
-# ------------------ WEB CRAWLING UPLOAD ------------------ #
 @s3_router.post("/upload/crawl")
 async def upload_crawl_to_s3_api(
     request: CrawlRequest,
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Save each crawl URL to S3 as its own file (one file per URL)
-    and trigger internal RAG fetch_and_index for each URL.
+    Save URL only if crawling & indexing succeed.
     """
     try:
         user_id = current_user["id"]
@@ -319,7 +316,6 @@ async def upload_crawl_to_s3_api(
         if not api_key:
             raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
 
-        # Validate URLs
         urls_list = request.url_list
         if not urls_list:
             raise HTTPException(400, "At least one URL must be provided")
@@ -330,35 +326,13 @@ async def upload_crawl_to_s3_api(
             "details": []
         }
 
-        saved_files = []  # track file names saved in S3
+        saved_files = []
 
         for url in urls_list:
 
-            # -----------------------------
-            # Create a filename from URL
-            # -----------------------------
-            filename = url_to_filename(url)
-
-            file_bytes = url.encode("utf-8")
-
-            # ---------------------------------
-            # Save file to S3 (one per URL)
-            # ---------------------------------
-            s3_key = f"{user_id}/{chatbot_title}/crawls/{filename}"
-            result = upload_file_to_s3(file_bytes, s3_key, "text/plain")
-
-            if result["status"] == "error":
-                indexing_summary["failed"].append({
-                    "url": url,
-                    "error": result["message"]
-                })
-                continue
-
-            saved_files.append(filename)
-
-            # --------------------------------------
-            # Trigger internal fetch_and_index
-            # --------------------------------------
+            # ------------------------------
+            # TRY CRAWLING & INDEXING
+            # ------------------------------
             try:
                 fetch_req = rag_routes.FetchRequest(
                     base_url=url,
@@ -368,21 +342,47 @@ async def upload_crawl_to_s3_api(
 
                 resp = await rag_routes.fetch_and_index(fetch_req, current_user)
 
-                indexing_summary["success_count"] += 1
-                indexing_summary["details"].append({
-                    "url": url,
-                    "result": resp
-                })
-
             except Exception as e:
                 indexing_summary["failed"].append({
                     "url": url,
                     "error": str(e)
                 })
+                continue     # ❌ Don't save to S3 if crawl/index fails
 
-        # -----------------------------
-        # Build final API response
-        # -----------------------------
+            # If indexing response is empty or contains known fail markers
+            if not resp or resp == {} or ("error" in resp):
+                indexing_summary["failed"].append({
+                    "url": url,
+                    "error": "Indexing returned no meaningful data"
+                })
+                continue    # ❌ Also don't save
+
+            # ------------------------------
+            # ONLY SAVE TO S3 IF CRAWL SUCCEEDED
+            # ------------------------------
+            filename = url_to_filename(url)
+            s3_key = f"{user_id}/{chatbot_title}/crawls/{filename}"
+            file_bytes = url.encode("utf-8")
+
+            result = upload_file_to_s3(file_bytes, s3_key, "text/plain")
+
+            if result["status"] == "error":
+                indexing_summary["failed"].append({
+                    "url": url,
+                    "error": result["message"]
+                })
+                continue
+
+            # ---------------------------------------
+            # SUCCESS CASE
+            # ---------------------------------------
+            saved_files.append(filename)
+            indexing_summary["success_count"] += 1
+            indexing_summary["details"].append({
+                "url": url,
+                "result": resp
+            })
+
         return {
             "chatbot_title": chatbot_title,
             "uploaded_by": user_id,
@@ -502,33 +502,49 @@ async def fetch_crawl_api(
     request: FetchRequest,
     current_user: dict = Depends(get_current_user),
 ):
+    """
+    Fetch all crawled URLs for a chatbot.
+    Each URL is stored in its own file under /crawls.
+    """
     try:
         user_id = current_user["id"]
         chatbot_title = request.chatbot_title.lower()
 
-        # 🔐 Check API key before fetching
+        # 🔐 Validate API key
         api_key = get_api_key(user_id, chatbot_title)
         if not api_key:
             raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
 
-        s3_key = f"{user_id}/{chatbot_title}/crawls/{chatbot_title}.txt"
-        content = get_file_from_s3(s3_key).decode("utf-8")
-        
-        # Split by newlines to get individual URLs
-        urls = [url.strip() for url in content.split('\n') if url.strip()]
+        prefix = f"{user_id}/{chatbot_title}/crawls/"
 
-        # Format URLs to match the expected API documentation
+        # This returns objects, not strings
+        s3_objects = list_files_in_s3(prefix)
+        print(s3_objects)
         crawls = []
-        for url in urls:
+
+        for obj in s3_objects:
+            # ⛔ obj is dict → extract its 'Key'
+            key = obj.get("key", "")
+
+            if not key.endswith(".txt"):
+                continue
+
+            # Extract filename after the prefix
+            filename = key.replace(prefix, "")
+
+            # Read URL inside the file
+            content = get_file_from_s3(key).decode("utf-8").strip()
+
             crawls.append({
-                "filename": f"{chatbot_title}.txt",
-                "url": url
+                "filename": filename,
+                "url": content
             })
 
         return {
             "chatbot_title": chatbot_title,
             "crawls": crawls
         }
+
     except Exception as e:
         raise HTTPException(500, str(e))
     
