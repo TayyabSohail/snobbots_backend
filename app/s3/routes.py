@@ -27,13 +27,15 @@ PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 pc = Pinecone(api_key=PINECONE_API_KEY)
 
 # ------------------ MODELS ------------------ #
-class RawTextRequest(BaseModel):
+class UploadRawTextRequest(BaseModel):
     chatbot_title: str
     raw_text: str
+    retrain_flag : bool =False
 
 class QARequest(BaseModel):
     chatbot_title: str
     qa_pairs: List[Dict[str, str]]  # [{"question": "...", "answer": "..."}]
+    retrain_flag: bool = False
 
 class CrawlRequest(BaseModel):
     chatbot_title: str
@@ -167,21 +169,46 @@ async def upload_file_to_s3_api(
 # ------------------ RAW TEXT UPLOAD ------------------ #
 @s3_router.post("/upload/raw")
 async def upload_raw_to_s3_api(
-    request: RawTextRequest,
+    request: UploadRawTextRequest,
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Upload raw text to S3 and index it (process_and_index_data).
-    Returns upload metadata + indexing result.
+    Upload raw text to S3 and index it.
+
+    NEW FEATURE:
+    - If request.force_refresh == True:
+        1) Calls /remove/raw
+        2) Uploads new file + indexes it
+    - If request.force_refresh == False:
+        → Direct upload + index (previous behavior)
     """
+
     try:
         user_id = current_user["id"]
         chatbot_title = request.chatbot_title.lower()
+        retrain_flag = getattr(request, "retrain_flag", False)
 
+        # Validate API key
         api_key = get_api_key(user_id, chatbot_title)
         if not api_key:
-            raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
+            raise HTTPException(403, f"No active API key for '{chatbot_title}'")
 
+        # ---------------------------------------------------------------
+        # STEP 0 — If retrain_flag=True, delete old RAW + vectors
+        # ---------------------------------------------------------------
+        print(  f"Retrain flag is set to {retrain_flag}"  )
+        if retrain_flag:
+            remove_payload = RemoveRequest(
+                chatbot_title=chatbot_title,
+                filename=f"{chatbot_title}.txt"
+            )
+
+            # Call the remove endpoint programmatically
+            await remove_raw_and_vectors_api(remove_payload, current_user)
+
+        # ---------------------------------------------------------------
+        # STEP 1 — Upload RAW text to S3
+        # ---------------------------------------------------------------
         s3_key = f"{user_id}/{chatbot_title}/raw/{chatbot_title}.txt"
         file_bytes = request.raw_text.encode("utf-8")
 
@@ -189,9 +216,12 @@ async def upload_raw_to_s3_api(
         if result["status"] == "error":
             raise HTTPException(500, result["message"])
 
-        # Index the raw text
+        # ---------------------------------------------------------------
+        # STEP 2 — Process + Index the text
+        # ---------------------------------------------------------------
         indexing_result = None
         indexing_errors = None
+
         try:
             proc_result = process_and_index_data(
                 user_id=user_id,
@@ -199,6 +229,7 @@ async def upload_raw_to_s3_api(
                 chatbot_title=chatbot_title,
             )
 
+            # Update token usage
             try:
                 update_tokens(
                     user_id=user_id,
@@ -213,24 +244,29 @@ async def upload_raw_to_s3_api(
                 "chunks_indexed": proc_result.get("chunks_indexed"),
                 "tokens_used": proc_result.get("tokens_used"),
             }
+
         except Exception as e:
             indexing_errors = str(e)
 
+        # ---------------------------------------------------------------
+        # STEP 3 — Return metadata
+        # ---------------------------------------------------------------
         return {
             "url": result["url"],
             "chatbot_title": chatbot_title,
             "uploaded_by": user_id,
             "source": "raw_text",
+            "force_refresh": retrain_flag,
             "indexing": {
                 "result": indexing_result,
                 "error": indexing_errors,
             },
         }
+
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(500, str(e))
-
 
 # ------------------ QA PAIRS UPLOAD ------------------ #
 @s3_router.post("/upload/qa")
@@ -240,16 +276,30 @@ async def upload_qa_to_s3_api(
 ):
     """
     Upload QA pairs JSON to S3 and index them (process_and_index_data with qa_json).
+    If replace_existing=True → remove old QA + vectors first.
     Returns upload metadata + indexing result.
     """
     try:
         user_id = current_user["id"]
         chatbot_title = request.chatbot_title.lower()
 
+        # Validate API Key
         api_key = get_api_key(user_id, chatbot_title)
         if not api_key:
             raise HTTPException(403, f"No active API key found for chatbot '{chatbot_title}'")
 
+        # --------------------------------------------------------------------
+        # NEW LOGIC: If replace_existing=True, call /remove/qa first
+        # --------------------------------------------------------------------
+        if getattr(request, "retrain_flag", False):
+            remove_payload = RemoveRequest(
+                chatbot_title=request.chatbot_title,
+                filename=f"{chatbot_title}.json"
+            )
+            await remove_qa_and_vectors_api(remove_payload, current_user)
+        # --------------------------------------------------------------------
+
+        # Upload new QA file to S3
         s3_key = f"{user_id}/{chatbot_title}/qa/{chatbot_title}.json"
         file_bytes = json.dumps(request.qa_pairs, indent=2).encode("utf-8")
 
@@ -294,11 +344,13 @@ async def upload_qa_to_s3_api(
                 "error": indexing_errors,
             },
         }
+
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(500, str(e))
-
+    
+# ------------------ CRAWL URLS UPLOAD ------------------ #
 @s3_router.post("/upload/crawl")
 async def upload_crawl_to_s3_api(
     request: CrawlRequest,
