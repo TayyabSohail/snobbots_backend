@@ -218,7 +218,7 @@ async def auth_callback(request: Request):
 
         # Redirect to frontend dashboard with tokens
         frontend_dashboard = (
-            f"{settings.frontend_url}/dashboard?"
+            f"{settings.frontend_url}/google/auth?"
             f"access_token={session.access_token}&refresh_token={session.refresh_token}"
         )
         logger.info(f"OAuth success, redirecting user {session.user.email} to dashboard")
