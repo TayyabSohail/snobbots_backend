@@ -39,24 +39,33 @@ class QARequest(BaseModel):
 
 class CrawlRequest(BaseModel):
     chatbot_title: str
-    url: Optional[str] = None  # single URL
-    urls: Optional[List[str]] = None  # multiple URLs
+    url_list: List[str]  # Primary field - always use url_list from frontend
+    
+    # Keep url and urls for backward compatibility (optional)
+    url: Optional[str] = None  # deprecated - use url_list instead
+    urls: Optional[List[str]] = None  # deprecated - use url_list instead
     
     @model_validator(mode='after')
     def validate_urls(self):
-        """Validate that exactly one of url or urls is provided."""
-        if self.url is None and self.urls is None:
-            raise ValueError("Either 'url' or 'urls' must be provided")
-        if self.url is not None and self.urls is not None:
-            raise ValueError("Cannot provide both 'url' and 'urls'. Use one or the other.")
+        """Validate URLs and ensure url_list is populated."""
+        # If url_list is provided, validate it
+        if self.url_list is not None:
+            if not isinstance(self.url_list, list) or len(self.url_list) == 0:
+                raise ValueError("url_list must be a non-empty list")
+            return self
+        
+        # Backward compatibility: convert url or urls to url_list
+        if self.url is not None:
+            self.url_list = [self.url]
+        elif self.urls is not None:
+            self.url_list = self.urls
+        else:
+            raise ValueError("Either 'url_list', 'url', or 'urls' must be provided")
+        
+        if not self.url_list or len(self.url_list) == 0:
+            raise ValueError("At least one URL must be provided")
+        
         return self
-    
-    @property
-    def url_list(self) -> List[str]:
-        """Returns a list of URLs, converting single URL to list if needed."""
-        if self.url:
-            return [self.url]
-        return self.urls or []
 
 class FetchRequest(BaseModel):
     chatbot_title: str
