@@ -31,4 +31,4 @@ beautifulsoup4
 certifi
 
 # For s3
-boto3
+boto3playwright-stealth

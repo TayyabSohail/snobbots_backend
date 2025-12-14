@@ -656,25 +656,55 @@ def get_appearance_public(request: ApiKeyRequest):
 
 # ------------------ WEB CRAWLING ------------------ #
 
+from playwright_stealth import Stealth
+
 @rag_router.post("/crawl/discover")
-def discover_links(request: DiscoverRequest, current_user: dict = Depends(get_current_user)):
-    """Discover all internal endpoints from the given website."""
+async def discover_links(request: DiscoverRequest, current_user: dict = Depends(get_current_user)):
+    """Discover all internal endpoints from the given website using Playwright with stealth."""
     if not current_user or "id" not in current_user:
         raise HTTPException(status_code=401, detail="Invalid or unauthorized user")
 
-    endpoints = get_internal_links(request.url)
-    return {"base_url": request.url, "endpoints": endpoints}
+    global _browser
+    if not _browser:
+        raise HTTPException(status_code=500, detail="Playwright browser not initialized.")
 
+    try:
+        page = await _browser.new_page()
+        
+        # Apple Stealth
+        stealth = Stealth()
+        await stealth.apply_stealth_async(page)
+        
+        # Navigate and wait for network/dom to settle
+        await page.goto(request.url, wait_until="domcontentloaded", timeout=60000)
+        await page.wait_for_timeout(2000)  # brief pause for dynamic content
+        
+        html_content = await page.content()
+        await page.close()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch {request.url}: {str(e)}")
+
+    endpoints = get_internal_links(request.url, html_content)
+    return {"base_url": request.url, "endpoints": endpoints}
 
 
 @rag_router.on_event("startup")
 async def startup_event():
-    """Launch a single global Playwright browser asynchronously."""
+    """Launch a single global Playwright browser asynchronously with stealth args."""
     global _playwright, _browser
     os.environ["SSL_CERT_FILE"] = certifi.where()
     _playwright = await async_playwright().start()
-    _browser = await _playwright.chromium.launch(headless=True)
-    print("✅ Playwright browser started globally.")
+    
+    # Launch with stealth arguments to avoid detection
+    _browser = await _playwright.chromium.launch(
+        headless=True,
+        args=[
+            "--disable-blink-features=AutomationControlled",
+            "--no-sandbox",
+            "--disable-setuid-sandbox"
+        ]
+    )
+    print("✅ Playwright browser started globally (Stealth Mode).")
 
 
 @rag_router.on_event("shutdown")
