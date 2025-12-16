@@ -33,3 +33,4 @@ certifi
 # For s3
 boto3
 playwright-stealth
+undetected-playwright

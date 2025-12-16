@@ -18,6 +18,7 @@ from app.RAG.token_tracker import update_tokens, get_user_total_tokens
 import asyncio
 from playwright.sync_api import sync_playwright
 from playwright.async_api import async_playwright
+from undetected_playwright import stealth_async
 
 
 import certifi
@@ -753,11 +754,15 @@ async def fetch_and_index(
 
     full_url = urljoin(request.base_url, request.endpoint)
     try:
-        page = await _browser.new_page()
+        context = await _browser.new_context()
+        await stealth_async(context)
+        page = await context.new_page()
+        
         await page.goto(full_url, wait_until="domcontentloaded", timeout=90000)
         await page.wait_for_selector("body", timeout=15000)
         html_content = await page.content()
         await page.close()
+        await context.close()
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to fetch or render {full_url}: {str(e)}")
 
